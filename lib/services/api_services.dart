@@ -159,7 +159,9 @@ class OrderService {
               .map((i) => {
                     'menu_id': i.product.id,
                     'quantity': i.quantity,
-                    'notes': i.note,
+                    if (i.condimentOptionIds.isNotEmpty)
+                      'condiment_option_ids': i.condimentOptionIds,
+                    if (i.note.isNotEmpty) 'notes': i.note,
                   })
               .toList(),
         },
@@ -172,13 +174,18 @@ class OrderService {
   }
 
   /// Polls a single order to refresh its status/payment fields.
-  static Future<Order> fetchOrder(int id) async {
+  /// Returns null on transient errors (network, timeout) so polling can retry.
+  static Future<Order?> fetchOrder(int id) async {
     try {
       final res = await ApiClient.instance.get(ApiEndpoints.orderDetail(id));
       final data = _unwrap(res) as Map;
       return Order.fromJson(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
-      throw ApiException(extractApiError(e));
+      // Bubble up auth errors; swallow transient errors for polling resilience
+      if (e.response?.statusCode == 401) rethrow;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 

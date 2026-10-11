@@ -1,5 +1,64 @@
 import 'core/utils/json_parse.dart';
 
+/// A condiment option (e.g., "Large", "Less Sugar", "Extra Espresso Shot").
+class CondimentOption {
+  final int id;
+  final int condimentGroupId;
+  final String name;
+  final double additionalPrice;
+
+  const CondimentOption({
+    required this.id,
+    required this.condimentGroupId,
+    required this.name,
+    required this.additionalPrice,
+  });
+
+  factory CondimentOption.fromJson(Map<String, dynamic> json) => CondimentOption(
+        id: parseInt(json['id']),
+        condimentGroupId: parseInt(json['condiment_group_id']),
+        name: json['name']?.toString() ?? '',
+        additionalPrice: parseDouble(json['additional_price']),
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || (other is CondimentOption && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+/// A group of condiment options (e.g., "Ukuran", "Tingkat Manis", "Extra").
+class CondimentGroup {
+  final int id;
+  final String name;
+  final String type; // single_select | multi_select
+  final bool isRequired;
+  final List<CondimentOption> options;
+
+  const CondimentGroup({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.isRequired,
+    required this.options,
+  });
+
+  bool get isMulti => type == 'multi_select';
+
+  factory CondimentGroup.fromJson(Map<String, dynamic> json) => CondimentGroup(
+        id: parseInt(json['id']),
+        name: json['name']?.toString() ?? '',
+        type: json['type']?.toString() ?? 'single_select',
+        isRequired: parseBool(json['is_required']),
+        options: (json['options'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(CondimentOption.fromJson)
+            .toList(),
+      );
+}
+
 /// A menu item from the backend (`/menus`).
 class Product {
   final int id;
@@ -8,6 +67,7 @@ class Product {
   final int price;
   final String category; // category display name, e.g. "Coffee"
   final String description;
+  final List<CondimentGroup> condimentGroups;
 
   Product({
     required this.id,
@@ -16,6 +76,7 @@ class Product {
     required this.price,
     required this.category,
     required this.description,
+    this.condimentGroups = const [],
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
@@ -27,28 +88,56 @@ class Product {
       price: parseDouble(json['price']).round(),
       category: cat is Map ? (cat['name']?.toString() ?? '') : '',
       description: json['description']?.toString() ?? '',
+      condimentGroups: (json['condiment_groups'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(CondimentGroup.fromJson)
+          .toList(),
     );
   }
 }
 
 class CartItem {
   final Product product;
-  final String milkType;
-  final String sweetness;
+  final List<CondimentOption> selectedCondiments;
+  final String notes;
   int quantity;
 
   CartItem({
     required this.product,
-    required this.milkType,
-    required this.sweetness,
+    this.selectedCondiments = const [],
+    this.notes = '',
     this.quantity = 1,
   });
 
-  String get uniqueId => '${product.id}_${milkType}_$sweetness';
+  List<int> get condimentOptionIds =>
+      selectedCondiments.map((c) => c.id).toList();
 
-  /// Customizations the backend stores as a free-text note (the customer
-  /// app does not yet map them onto real condiment options).
-  String get note => 'Susu: $milkType, Kemanisan: $sweetness';
+  int get unitPrice {
+    final condimentSum = selectedCondiments.fold<double>(
+      0.0,
+      (sum, c) => sum + c.additionalPrice,
+    );
+    return product.price + condimentSum.round();
+  }
+
+  int get totalPrice => unitPrice * quantity;
+
+  String get uniqueId {
+    final ids = [...condimentOptionIds]..sort();
+    final cleanNotes = notes.trim().toLowerCase();
+    return '${product.id}_${ids.join('-')}_$cleanNotes';
+  }
+
+  String get note {
+    final parts = <String>[];
+    if (selectedCondiments.isNotEmpty) {
+      parts.add(selectedCondiments.map((c) => c.name).join(', '));
+    }
+    if (notes.trim().isNotEmpty) {
+      parts.add('Catatan: ${notes.trim()}');
+    }
+    return parts.join(' | ');
+  }
 }
 
 /// Maps backend status enum → Indonesian display label.

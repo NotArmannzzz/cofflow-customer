@@ -21,15 +21,16 @@ Aplikasi ini berkomunikasi langsung dengan backend Laravel melalui REST API meng
 - **Filter Kategori Dinamis**: Mengambil daftar kategori secara real-time dari `GET /categories` dengan opsi default "Semua".
 - **Katalog Menu**: Menampilkan grid produk dari `GET /menus` beserta foto, harga, dan deskripsi singkat.
 
-### 3. Detail & Kustomisasi Produk
-- **Pilihan Susu**: *Fresh Milk* (default), *Oat Milk*, *Almond Milk*, dan *Soy Milk*.
-- **Tingkat Kemanisan**: *Normal Sweet (100%)*, *Less Sweet (70%)*, *Half Sweet (50%)*, dan *No Sugar (0%)*.
+### 3. Detail & Kustomisasi Produk (Condiment Dinamis)
+- **Grup & Opsi Condiment Dinamis**: Setiap produk memuat relasi `condiment_groups` dan `options` dari backend (contoh: *Ukuran*, *Tingkat Manis*, *Extra*).
+- **Single-Select & Multi-Select**: Mendukung opsi wajib/opsional dan single/multi-select dengan penambahan harga masing-masing (`additional_price`).
 - **Quantity Stepper**: Pengaturan jumlah pesanan secara langsung.
-- **Catatan Otomatis**: Preferensi kustomisasi dikirim sebagai catatan (`notes`) per item pesanan.
+- **Sinkronisasi Backend**: Pilihan condiment dikirim sebagai `condiment_option_ids` terstruktur untuk pemotongan BOM backend, serta ringkasan teks otomatis pada `notes` per item pesanan.
 
 ### 4. Keranjang Belanja (Cart)
 - Manajemen item: Tambah/kurang kuantitas atau hapus item.
-- Kalkulasi subtotal dan total harga secara real-time.
+- Kalkulasi harga dinamis: `unitPrice` dihitung dari harga dasar produk ditambah seluruh `additional_price` condiment yang dipilih. Subtotal dan total dihitung secara real-time.
+- Identifikasi unik: Baris keranjang membedakan kombinasi condiment yang berbeda untuk produk yang sama.
 - Navigasi cepat ke lembar pemilihan metode pembayaran.
 
 ### 5. Checkout & Multi-Metode Pembayaran
@@ -41,6 +42,7 @@ Mendukung 3 metode pembayaran utama:
 ### 6. Pelacakan Pesanan (Order Tracking)
 - **Timeline Status Interaktif**: Pembaruan status berkala melalui **polling setiap 5 detik**:
   $$\text{Pesanan Diterima (pending)} \longrightarrow \text{Sedang Dibuat (processing)} \longrightarrow \text{Siap Diambil (ready)} \longrightarrow \text{Selesai (completed)}$$
+- **Polling Resilient**: Service menangani error transien (timeout/koneksi putus) secara transparan tanpa menginterupsi antarmuka polling.
 - Informasi nomor antrean (`Antrean #X`) dan estimasi waktu penyiapan.
 - Dialog konfirmasi otomatis saat pesanan telah berstatus `completed`.
 
@@ -149,8 +151,8 @@ Gunakan kredensial pengujian yang telah di-seed pada backend:
 
 1. **Autentikasi**: Buka aplikasi $\rightarrow$ Login menggunakan akun customer atau daftar akun baru.
 2. **Eksplorasi Menu**: Di layar Home, gunakan filter kategori (misal: "Coffee") $\rightarrow$ Produk tersaring dinamis.
-3. **Kustomisasi**: Pilih salah satu menu $\rightarrow$ Atur varian susu, tingkat kemanisan, dan jumlah $\rightarrow$ Klik **Tambah ke Keranjang**.
-4. **Keranjang**: Masuk ke tab Keranjang $\rightarrow$ Verifikasi item dan total harga $\rightarrow$ Klik **Pilih Pembayaran**.
+3. **Kustomisasi**: Pilih salah satu menu $\rightarrow$ Atur opsi condiment (Ukuran, Tingkat Manis, Extra, dll.) dan jumlah $\rightarrow$ Klik **Tambah ke Keranjang**.
+4. **Keranjang**: Masuk ke tab Keranjang $\rightarrow$ Verifikasi item, pilihan condiment, dan total harga $\rightarrow$ Klik **Pilih Pembayaran**.
 5. **Checkout**:
    - Pilih metode **Cash**, **QRIS**, atau **Virtual Account (BCA/BNI/BRI/Mandiri)**.
    - Klik **Pesan Sekarang**.
@@ -183,9 +185,25 @@ Format respons standar backend:
 | `GET` | `/auth/me` | Mengambil data profil pelanggan aktif |
 | `GET` | `/menus` | Mengambil seluruh katalog menu aktif |
 | `GET` | `/categories` | Mengambil daftar kategori menu |
-| `POST` | `/orders` | Membuat pesanan baru (`preorder`, metode bayar, daftar item) |
+| `POST` | `/orders` | Membuat pesanan baru (`preorder`, metode bayar, daftar item + `condiment_option_ids`) |
 | `GET` | `/orders` | Mengambil riwayat seluruh pesanan milik pelanggan |
 | `GET` | `/orders/{id}` | Mengambil detail spesifik pesanan & status pembayaran |
+
+Payload pembuatan order (`POST /orders`):
+```json
+{
+  "order_type": "preorder",
+  "payment_method": "cash",
+  "items": [
+    {
+      "menu_id": 3,
+      "quantity": 1,
+      "condiment_option_ids": [2, 5],
+      "notes": "Large, Normal"
+    }
+  ]
+}
+```
 
 ---
 

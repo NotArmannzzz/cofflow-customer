@@ -15,6 +15,8 @@ void main() async {
   // On 401 the interceptor clears the token; bounce the user to login.
   ApiClient.onUnauthorized = () async {
     AppState.stopPolling();
+    AppState.activeOrders.clear();
+    AppState.cart.clear();
     rootNavKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (r) => false,
@@ -23,11 +25,11 @@ void main() async {
 
   final loggedIn = await AuthService.isLoggedIn();
 
-  runApp(CofflowApp(loggedIn: loggedIn));
+  runApp(KoncoSpaceApp(loggedIn: loggedIn));
 }
 
-class CofflowApp extends StatelessWidget {
-  const CofflowApp({super.key, required this.loggedIn});
+class KoncoSpaceApp extends StatelessWidget {
+  const KoncoSpaceApp({super.key, required this.loggedIn});
 
   final bool loggedIn;
 
@@ -36,7 +38,7 @@ class CofflowApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavKey,
-      title: 'Cofflow.',
+      title: 'Konco Space',
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFFF7F7F5),
@@ -55,33 +57,293 @@ class CofflowApp extends StatelessWidget {
 // --- Brand Colors ---
 const kBrandDark = Color(0xFF1C2C22);
 const kBrandAccent = Color(0xFFD4AF37);
+const kBrandBrown = Color(0xFF8D5B4C);
 const kBrandLight = Color(0xFFF7F7F5);
 const kBrandMuted = Color(0xFFEEEEEB);
 
+class CartNotificationToast {
+  static OverlayEntry? _entry;
+  static Timer? _timer;
+  static _CartToastWidgetState? _activeState;
+
+  static void show(BuildContext context, {required String itemName}) {
+    _timer?.cancel();
+
+    // Jika toast sedang aktif, cukup perbarui nama item dan reset timer 5 detik
+    if (_activeState != null && _activeState!.mounted) {
+      _activeState!.update(itemName);
+      _timer = Timer(const Duration(seconds: 5), () {
+        _activeState?.hide();
+      });
+      return;
+    }
+
+    _safeRemove();
+
+    final overlay = rootNavKey.currentState?.overlay ?? Overlay.maybeOf(context);
+    if (overlay == null) return;
+
+    late OverlayEntry newEntry;
+    newEntry = OverlayEntry(
+      builder: (ctx) => _CartToastWidget(
+        itemName: itemName,
+        onMounted: (state) => _activeState = state,
+        onDismissed: () {
+          if (_entry == newEntry) {
+            _safeRemove();
+          }
+        },
+      ),
+    );
+
+    _entry = newEntry;
+    overlay.insert(newEntry);
+
+    _timer = Timer(const Duration(seconds: 5), () {
+      _activeState?.hide();
+    });
+  }
+
+  static void dismiss() {
+    _timer?.cancel();
+    if (_activeState != null && _activeState!.mounted) {
+      _activeState?.hide();
+    } else {
+      _safeRemove();
+    }
+  }
+
+  static void _safeRemove() {
+    if (_entry != null) {
+      try {
+        _entry?.remove();
+      } catch (_) {}
+      _entry = null;
+      _activeState = null;
+    }
+  }
+}
+
+class _CartToastWidget extends StatefulWidget {
+  final String itemName;
+  final ValueChanged<_CartToastWidgetState> onMounted;
+  final VoidCallback onDismissed;
+
+  const _CartToastWidget({
+    required this.itemName,
+    required this.onMounted,
+    required this.onDismissed,
+  });
+
+  @override
+  State<_CartToastWidget> createState() => _CartToastWidgetState();
+}
+
+class _CartToastWidgetState extends State<_CartToastWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Offset> _offsetAnimation;
+  late String _itemName;
+  bool _isHiding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _itemName = widget.itemName;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+    );
+    _offsetAnimation = Tween<Offset>(
+      begin: const Offset(0, 2.0),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    ));
+
+    widget.onMounted(this);
+    _controller.forward();
+  }
+
+  void update(String newItemName) {
+    if (mounted) {
+      setState(() => _itemName = newItemName);
+      if (_isHiding) {
+        _isHiding = false;
+        _controller.forward();
+      }
+    }
+  }
+
+  Future<void> hide() async {
+    if (_isHiding || !mounted) return;
+    _isHiding = true;
+    try {
+      await _controller.reverse();
+    } catch (_) {}
+    if (mounted) {
+      widget.onDismissed();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 98.0;
+
+    return Positioned(
+      bottom: bottomPadding,
+      left: 16,
+      right: 16,
+      child: SlideTransition(
+        position: _offsetAnimation,
+        child: GestureDetector(
+          onVerticalDragEnd: (details) {
+            if (details.primaryVelocity != null &&
+                details.primaryVelocity! > 50) {
+              hide();
+            }
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: kBrandDark,
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: kBrandAccent.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      LucideIcons.check,
+                      color: kBrandAccent,
+                      size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _itemName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          'Ditambahkan ke keranjang',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.75),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  InkWell(
+                    onTap: () {
+                      CartNotificationToast.dismiss();
+                      AppState.changeTab(2);
+                    },
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kBrandAccent,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Text(
+                        'Lihat keranjang',
+                        style: TextStyle(
+                          color: kBrandDark,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AppState {
-  static final GlobalKey<_MainNavigationState> navKey =
-      GlobalKey<_MainNavigationState>();
+  static final GlobalKey<MainNavigationState> navKey =
+      GlobalKey<MainNavigationState>();
 
   static List<CartItem> cart = [];
-  static Order? currentOrder;
+
+  /// Semua order yang masih aktif (pending / processing / ready).
+  /// Diganti dari single `currentOrder` agar bisa lacak banyak order sekaligus.
+  static List<Order> activeOrders = [];
 
   static Timer? _pollTimer;
 
-  static void changeTab(int i) => navKey.currentState?.updateIndex(i);
+  static void changeTab(int i) {
+    CartNotificationToast.dismiss();
+    navKey.currentState?.updateIndex(i);
+  }
+
   static void refreshUI() => navKey.currentState?.refresh();
 
-  static void addToCart(CartItem newItem) {
+  /// Tambah item ke keranjang tanpa memaksa pindah tab.
+  /// Tampilkan notifikasi animasi yang otomatis meluncur turun kebawah dalam 5 detik.
+  static void addToCart(CartItem newItem, BuildContext context) {
     int index = cart.indexWhere((i) => i.uniqueId == newItem.uniqueId);
     if (index != -1) {
       cart[index].quantity += newItem.quantity;
     } else {
       cart.add(newItem);
     }
-    changeTab(2);
+    // Tampilkan notifikasi animasi meluncur turun kebawah dalam 5 detik
+    CartNotificationToast.show(
+      context,
+      itemName: newItem.product.name,
+    );
   }
 
-  /// Sends the order to the backend. Returns the created [Order] (which holds
-  /// payment fields for qris/VA flows). Throws [ApiException] on failure.
+  /// Kirim order ke backend. Order baru ditambahkan ke [activeOrders].
+  /// Throws [ApiException] on failure.
   static Future<Order> submitOrder({
     required String paymentMethod,
     String? paymentChannel,
@@ -91,35 +353,57 @@ class AppState {
       paymentMethod: paymentMethod,
       paymentChannel: paymentChannel,
     );
-    currentOrder = order;
+    activeOrders.add(order);
     cart = [];
     return order;
   }
 
-  /// Begins tracking the active order via polling (backend has no realtime).
+  /// Mulai polling semua active orders setiap 5 detik.
+  /// Update status di [activeOrders], hapus yang sudah completed/cancelled.
   static void startPolling(BuildContext context) {
     stopPolling();
-    final id = currentOrder?.id;
-    if (id == null) return;
+    if (activeOrders.isEmpty) return;
 
     _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      try {
-        final fresh = await OrderService.fetchOrder(id);
-        currentOrder = currentOrder?.copyWith(
+      if (activeOrders.isEmpty) {
+        stopPolling();
+        return;
+      }
+
+      // Poll semua active orders sekaligus (paralel)
+      final futures = activeOrders.map((o) => OrderService.fetchOrder(o.id));
+      final results = await Future.wait(futures, eagerError: false);
+
+      bool needsRefresh = false;
+      final List<Order> stillActive = [];
+
+      for (int i = 0; i < results.length; i++) {
+        final fresh = results[i];
+        if (fresh == null) {
+          stillActive.add(activeOrders[i]); // keep, retry next tick
+          continue;
+        }
+
+        // Update status di list
+        activeOrders[i] = activeOrders[i].copyWith(
           status: fresh.status,
           paymentStatus: fresh.paymentStatus,
         );
-        refreshUI();
+        needsRefresh = true;
 
         if (fresh.status == 'completed') {
-          stopPolling();
-          if (context.mounted) _showDoneDialog(context);
+          if (context.mounted) _showDoneDialog(context, fresh);
+          // Order selesai — tidak masukkan ke stillActive (dihapus dari list aktif)
         } else if (fresh.status == 'cancelled') {
-          stopPolling();
+          // Dibatalkan — hapus dari list aktif
+        } else {
+          stillActive.add(activeOrders[i]);
         }
-      } catch (_) {
-        // transient; next tick retries
       }
+
+      activeOrders = stillActive;
+      if (needsRefresh && context.mounted) refreshUI();
+      if (activeOrders.isEmpty) stopPolling();
     });
   }
 
@@ -128,18 +412,17 @@ class AppState {
     _pollTimer = null;
   }
 
-  static void _showDoneDialog(BuildContext context) {
+  static void _showDoneDialog(BuildContext context, Order order) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: const Text('Sukses!', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text('Pesanan kamu sudah selesai. Terima kasih!'),
+        content: Text('Pesanan #${order.queueNumber} sudah selesai. Terima kasih!'),
         actions: [
           TextButton(
             onPressed: () {
-              currentOrder = null;
               refreshUI();
               Navigator.pop(ctx);
             },
@@ -205,7 +488,7 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             const SizedBox(height: 24),
-            Text('Cofflow.',
+            Text('Konco Space',
                 style: GoogleFonts.plusJakartaSans(
                     color: Colors.white,
                     fontSize: 40,
@@ -290,7 +573,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: const Icon(LucideIcons.coffee, color: kBrandAccent, size: 40),
             ),
             const SizedBox(height: 24),
-            Text('Cofflow.',
+            Text('Konco Space',
                 style: GoogleFonts.plusJakartaSans(
                     color: kBrandDark,
                     fontSize: 36,
@@ -627,10 +910,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
 class MainNavigation extends StatefulWidget {
   const MainNavigation({super.key});
   @override
-  State<MainNavigation> createState() => _MainNavigationState();
+  State<MainNavigation> createState() => MainNavigationState();
 }
 
-class _MainNavigationState extends State<MainNavigation> {
+class MainNavigationState extends State<MainNavigation> {
   int _currentIndex = 0;
   void updateIndex(int i) => setState(() => _currentIndex = i);
   void refresh() => setState(() {});
@@ -804,7 +1087,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Column(children: [
       const StickyHeader(
-          title: 'Cofflow.',
+          title: 'Konco Space',
           subtitle: 'Kopi Terbaik Untukmu',
           icon: LucideIcons.bell,
           hasNotification: true),
@@ -1039,7 +1322,7 @@ Widget _menuImage(String url, {double? width, double? height}) {
   );
 }
 
-// DetailScreen — addToCart unchanged (milk/sweetness → order note)
+// DetailScreen — mendukung condiment dinamis dari backend dan fallback catatan teks
 class DetailScreen extends StatefulWidget {
   final Product product;
   const DetailScreen({super.key, required this.product});
@@ -1048,9 +1331,47 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> {
-  String _milkType = 'Oat';
-  String _sweetness = 'Normal';
+  final TextEditingController _notesController = TextEditingController();
   int _quantity = 1;
+  final Map<int, Set<int>> _selectedOptionsByGroup = {};
+
+  @override
+  void initState() {
+    super.initState();
+    for (final group in widget.product.condimentGroups) {
+      _selectedOptionsByGroup[group.id] = {};
+      if (group.isRequired && group.options.isNotEmpty) {
+        _selectedOptionsByGroup[group.id]!.add(group.options.first.id);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  List<CondimentOption> get _selectedCondiments {
+    final list = <CondimentOption>[];
+    for (final group in widget.product.condimentGroups) {
+      final selectedIds = _selectedOptionsByGroup[group.id] ?? {};
+      for (final opt in group.options) {
+        if (selectedIds.contains(opt.id)) {
+          list.add(opt);
+        }
+      }
+    }
+    return list;
+  }
+
+  int get _unitPrice {
+    final condimentSum = _selectedCondiments.fold<double>(
+      0.0,
+      (sum, c) => sum + c.additionalPrice,
+    );
+    return widget.product.price + condimentSum.round();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1087,59 +1408,143 @@ class _DetailScreenState extends State<DetailScreen> {
                 ])),
           ]),
           Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Jenis Susu', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Row(
-                    children: ['Normal', 'Oat', 'Almond']
-                        .map((m) => Expanded(
-                            child: GestureDetector(
-                                onTap: () => setState(() => _milkType = m),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (widget.product.condimentGroups.isNotEmpty) ...[
+                  ...widget.product.condimentGroups.map((group) {
+                    final selected = _selectedOptionsByGroup[group.id] ?? {};
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                group.name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                group.isRequired ? '(Wajib)' : '(Opsional)',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: group.isRequired ? Colors.red : Colors.grey,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: group.options.map((opt) {
+                              final isChosen = selected.contains(opt.id);
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    if (group.isMulti) {
+                                      if (isChosen) {
+                                        selected.remove(opt.id);
+                                      } else {
+                                        selected.add(opt.id);
+                                      }
+                                    } else {
+                                      selected.clear();
+                                      selected.add(opt.id);
+                                    }
+                                  });
+                                },
                                 child: Container(
-                                    margin: const EdgeInsets.only(right: 8),
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                        color: _milkType == m ? kBrandDark : Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border:
-                                            Border.all(color: const Color(0xFFF1F1F1))),
-                                    alignment: Alignment.center,
-                                    child: Text(m,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: isChosen ? kBrandDark : Colors.white,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: isChosen
+                                          ? kBrandDark
+                                          : const Color(0xFFE5E7EB),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        opt.name,
                                         style: TextStyle(
-                                            color: _milkType == m
-                                                ? Colors.white
-                                                : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12))))))
-                        .toList()),
-                const SizedBox(height: 32),
-                const Text('Kemanisan', style: TextStyle(fontWeight: FontWeight.bold)),
+                                          color: isChosen
+                                              ? Colors.white
+                                              : Colors.black87,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      if (opt.additionalPrice > 0) ...[
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          '+Rp${opt.additionalPrice.round() ~/ 1000}K',
+                                          style: TextStyle(
+                                            color: isChosen
+                                                ? Colors.white70
+                                                : kBrandBrown,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+                const Text(
+                  'Catatan Pesanan',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tambahkan instruksi khusus untuk dapur/barista (opsional)',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
                 const SizedBox(height: 12),
-                Row(
-                    children: ['Less', 'Normal', 'Extra']
-                        .map((l) => Expanded(
-                            child: GestureDetector(
-                                onTap: () => setState(() => _sweetness = l),
-                                child: Container(
-                                    margin: const EdgeInsets.only(right: 8),
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                        color:
-                                            _sweetness == l ? kBrandDark : Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border:
-                                            Border.all(color: const Color(0xFFF1F1F1))),
-                                    alignment: Alignment.center,
-                                    child: Text(l,
-                                        style: TextStyle(
-                                            color: _sweetness == l
-                                                ? Colors.white
-                                                : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12))))))
-                        .toList()),
-              ])),
+                TextField(
+                  controller: _notesController,
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    hintText: 'Contoh: Jangan terlalu panas, potong jadi 2, dll.',
+                    hintStyle: const TextStyle(fontSize: 13, color: Colors.grey),
+                    fillColor: Colors.white,
+                    filled: true,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: kBrandDark, width: 1.5),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ]))),
         Container(
             padding: const EdgeInsets.all(24),
@@ -1167,12 +1572,15 @@ class _DetailScreenState extends State<DetailScreen> {
               Expanded(
                   child: ElevatedButton(
                       onPressed: () {
-                        AppState.addToCart(CartItem(
-                          product: widget.product,
-                          milkType: _milkType,
-                          sweetness: _sweetness,
-                          quantity: _quantity,
-                        ));
+                        AppState.addToCart(
+                          CartItem(
+                            product: widget.product,
+                            notes: _notesController.text.trim(),
+                            selectedCondiments: _selectedCondiments,
+                            quantity: _quantity,
+                          ),
+                          context,
+                        );
                         Navigator.pop(context);
                       },
                       style: ElevatedButton.styleFrom(
@@ -1181,7 +1589,7 @@ class _DetailScreenState extends State<DetailScreen> {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(20))),
                       child: Text(
-                          'TAMBAH • Rp${(widget.product.price * _quantity) ~/ 1000}K',
+                          'TAMBAH • Rp${(_unitPrice * _quantity) ~/ 1000}K',
                           style: const TextStyle(fontWeight: FontWeight.bold)))),
             ])),
       ]),
@@ -1226,6 +1634,7 @@ class _CartScreenState extends State<CartScreen> {
         // QRIS / VA: show payment instructions, then poll.
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => PaymentScreen(order: order)));
+        // Polling dimulai setelah pembayaran dikonfirmasi di PaymentScreen._onPaid()
       }
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -1238,7 +1647,7 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    int subtotal = AppState.cart.fold(0, (s, i) => s + i.product.price * i.quantity);
+    int subtotal = AppState.cart.fold(0, (s, i) => s + i.totalPrice);
 
     return Column(children: [
       StickyHeader(
@@ -1279,13 +1688,14 @@ class _CartScreenState extends State<CartScreen> {
                               Text(item.product.name,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold, color: kBrandDark)),
-                              Text('${item.milkType} | ${item.sweetness}',
-                                  style: const TextStyle(
-                                      color: Colors.grey,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
+                              if (item.note.isNotEmpty)
+                                Text(item.note,
+                                    style: const TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold)),
                               const SizedBox(height: 8),
-                              Text('Rp${(item.product.price * item.quantity) ~/ 1000}K',
+                              Text('Rp${item.totalPrice ~/ 1000}K',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold, fontSize: 13)),
                             ])),
@@ -1497,10 +1907,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _checking = true;
     try {
       final fresh = await OrderService.fetchOrder(widget.order.id);
-      if (!mounted) return;
+      if (!mounted || fresh == null) return;
       setState(() => _paymentStatus = fresh.paymentStatus);
-      AppState.currentOrder =
-          AppState.currentOrder?.copyWith(paymentStatus: fresh.paymentStatus, status: fresh.status);
+
+      // Sync status ke activeOrders
+      final idx = AppState.activeOrders.indexWhere((o) => o.id == widget.order.id);
+      if (idx != -1) {
+        AppState.activeOrders[idx] = AppState.activeOrders[idx]
+            .copyWith(paymentStatus: fresh.paymentStatus, status: fresh.status);
+      }
+
       if (fresh.paymentStatus == 'paid') {
         _timer?.cancel();
         _onPaid();
@@ -1626,39 +2042,134 @@ class _PaymentScreenState extends State<PaymentScreen> {
 }
 
 // ─────────────────────────────────────────────────────────
-// ORDERS SCREEN — status from polling
+// ORDERS SCREEN — list semua active orders + polling
 // ─────────────────────────────────────────────────────────
 class OrdersScreen extends StatelessWidget {
   const OrdersScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    if (AppState.currentOrder == null) {
-      return Column(children: [
-        const StickyHeader(
-            title: 'status.', subtitle: 'Lacak Pesananmu', icon: LucideIcons.timer),
-        Expanded(
-            child: Center(
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(LucideIcons.coffee, size: 64, color: Colors.grey.shade200),
-          const SizedBox(height: 16),
-          const Text('Belum ada pesanan aktif',
-              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-        ]))),
-      ]);
-    }
-
-    final order = AppState.currentOrder!;
-    final currentIdx = kStatusFlow.indexOf(order.status);
-    final cancelled = order.status == 'cancelled';
+    final orders = AppState.activeOrders;
 
     return Column(children: [
       StickyHeader(
-          title: 'status pesanan.',
-          subtitle: 'Antrean #${order.queueNumber}',
-          icon: LucideIcons.coffee),
+          title: 'status.',
+          subtitle: orders.isEmpty
+              ? 'Lacak Pesananmu'
+              : '${orders.length} pesanan aktif',
+          icon: LucideIcons.timer),
       Expanded(
-          child: SingleChildScrollView(
+        child: orders.isEmpty
+            ? Center(
+                child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                  Icon(LucideIcons.coffee, size: 64, color: Colors.grey.shade200),
+                  const SizedBox(height: 16),
+                  const Text('Belum ada pesanan aktif',
+                      style:
+                          TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                ]))
+            : ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                itemCount: orders.length,
+                itemBuilder: (ctx, i) => _OrderCard(order: orders[i]),
+              ),
+      ),
+    ]);
+  }
+}
+
+class _OrderCard extends StatelessWidget {
+  final Order order;
+  const _OrderCard({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final cancelled = order.status == 'cancelled';
+    final currentIdx = cancelled ? -1 : kStatusFlow.indexOf(order.status);
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+          context, MaterialPageRoute(builder: (_) => _OrderDetailScreen(order: order))),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFFF1F1F1))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('Antrean #${order.queueNumber}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                  color: cancelled ? Colors.red.shade50 : kBrandDark,
+                  borderRadius: BorderRadius.circular(100)),
+              child: Text(
+                  kStatusLabels[order.status] ?? order.status,
+                  style: TextStyle(
+                      color: cancelled ? Colors.red : Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text('Total: Rp${order.total ~/ 1000}K',
+              style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          const SizedBox(height: 12),
+          // Mini progress bar
+          if (!cancelled)
+            Row(
+              children: List.generate(kStatusFlow.length, (i) {
+                final done = currentIdx >= i;
+                return Expanded(
+                  child: Container(
+                    height: 4,
+                    margin: const EdgeInsets.only(right: 4),
+                    decoration: BoxDecoration(
+                        color: done ? kBrandAccent : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(2)),
+                  ),
+                );
+              }),
+            ),
+          if (cancelled)
+            const Text('Pesanan dibatalkan',
+                style: TextStyle(color: Colors.red, fontSize: 11)),
+          const SizedBox(height: 4),
+          const Align(
+            alignment: Alignment.centerRight,
+            child: Text('Ketuk untuk detail →',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _OrderDetailScreen extends StatelessWidget {
+  final Order order;
+  const _OrderDetailScreen({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final currentIdx = kStatusFlow.indexOf(order.status);
+    final cancelled = order.status == 'cancelled';
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: kBrandLight,
+        elevation: 0,
+        foregroundColor: kBrandDark,
+        title: Text('Antrean #${order.queueNumber}'),
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(children: [
           Row(children: [
@@ -1666,19 +2177,17 @@ class OrdersScreen extends StatelessWidget {
             const SizedBox(width: 16),
             Expanded(child: _infoCard('ANTREAN', '${order.queueNumber}', dark: true)),
           ]),
-          const SizedBox(height: 40),
+          const SizedBox(height: 32),
           if (cancelled)
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                  color: Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(20)),
+                  color: Colors.red.shade50, borderRadius: BorderRadius.circular(20)),
               child: const Row(children: [
                 Icon(LucideIcons.xCircle, color: Colors.red),
                 SizedBox(width: 12),
                 Text('Pesanan dibatalkan',
-                    style: TextStyle(
-                        color: Colors.red, fontWeight: FontWeight.bold)),
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
               ]),
             )
           else
@@ -1696,29 +2205,26 @@ class OrdersScreen extends StatelessWidget {
                                 : Colors.grey.shade300,
                             size: 24),
                         const SizedBox(width: 24),
-                        Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(kStatusLabels[kStatusFlow[i]] ?? kStatusFlow[i],
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: currentIdx >= i
-                                          ? kBrandDark
-                                          : Colors.grey)),
-                              Text(
-                                  currentIdx == i
-                                      ? 'Sedang diproses...'
-                                      : i < currentIdx
-                                          ? 'Selesai'
-                                          : 'Belum diproses',
-                                  style: const TextStyle(
-                                      fontSize: 10, color: Colors.grey)),
-                            ]),
+                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(kStatusLabels[kStatusFlow[i]] ?? kStatusFlow[i],
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color:
+                                      currentIdx >= i ? kBrandDark : Colors.grey)),
+                          Text(
+                              currentIdx == i
+                                  ? 'Sedang diproses...'
+                                  : i < currentIdx
+                                      ? 'Selesai'
+                                      : 'Belum diproses',
+                              style:
+                                  const TextStyle(fontSize: 10, color: Colors.grey)),
+                        ]),
                       ]),
                     )),
         ]),
-      )),
-    ]);
+      ),
+    );
   }
 
   Widget _infoCard(String label, String value, {required bool dark}) => Container(
@@ -1834,14 +2340,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     _menuItem('Pengaturan', LucideIcons.settings, () {}),
                     _menuItem('Bantuan', LucideIcons.helpCircle, () {}),
                     _menuItem('Keluar', LucideIcons.logOut, () async {
+                      final nav = Navigator.of(context);
+                      CartNotificationToast.dismiss();
                       AppState.stopPolling();
+                      AppState.activeOrders.clear();
+                      AppState.cart.clear();
                       await AuthService.signOut();
-                      if (mounted) {
-                        Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (_) => const LoginScreen()),
-                            (r) => false);
-                      }
+                      if (!mounted) return;
+                      nav.pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (_) => const LoginScreen()),
+                          (r) => false);
                     }, color: Colors.red),
                   ]),
                 )),

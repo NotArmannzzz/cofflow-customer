@@ -1,8 +1,8 @@
 #!/bin/sh
 # This is a generated file; do not edit or check into version control.
-export "FLUTTER_ROOT=F:\UpitraTugas\SMT-3.4\flutter"
-export "FLUTTER_APPLICATION_PATH=F:\UpitraTugas\SMT-3.4\Mobile Web Project\customer_app"
-export "FLUTTER_FRAMEWORK_SWIFT_PACKAGE_PATH=F:\UpitraTugas\SMT-3.4\Mobile Web Project\customer_app\macos\Flutter\ephemeral\Packages\.packages\FlutterFramework"
+export "FLUTTER_ROOT=D:\Flutter\flutter"
+export "FLUTTER_APPLICATION_PATH=D:\UPITRATUGAS\capstone\cofflow-customer"
+export "FLUTTER_FRAMEWORK_SWIFT_PACKAGE_PATH=D:\UPITRATUGAS\capstone\cofflow-customer\macos\Flutter\ephemeral\Packages\.packages\FlutterFramework"
 export "COCOAPODS_PARALLEL_CODE_SIGN=true"
 export "FLUTTER_BUILD_DIR=build"
 export "FLUTTER_BUILD_NAME=1.0.0"
