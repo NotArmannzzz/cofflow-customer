@@ -8,6 +8,8 @@ class Product {
   final int price;
   final String category; // category display name, e.g. "Coffee"
   final String description;
+  /// Member points earned per unit (backend `points_per_item`).
+  final int points;
 
   Product({
     required this.id,
@@ -16,6 +18,7 @@ class Product {
     required this.price,
     required this.category,
     required this.description,
+    this.points = 0,
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
@@ -27,6 +30,7 @@ class Product {
       price: parseDouble(json['price']).round(),
       category: cat is Map ? (cat['name']?.toString() ?? '') : '',
       description: json['description']?.toString() ?? '',
+      points: parseInt(json['points_per_item']),
     );
   }
 }
@@ -168,4 +172,226 @@ class UserProfile {
       memberSince: parseDateTime(json['created_at']),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// Loyalty / membership
+// ─────────────────────────────────────────────────────────
+
+const Map<String, String> kTierLabels = {
+  'bronze': 'Bronze',
+  'silver': 'Silver',
+  'gold': 'Gold',
+};
+
+class TierThreshold {
+  TierThreshold(this.tier, this.threshold);
+  final String tier;
+  final int threshold;
+}
+
+/// `/loyalty` summary: balance, tier and progress to the next tier.
+class LoyaltySummary {
+  LoyaltySummary({
+    required this.enabled,
+    required this.pointsBalance,
+    required this.lifetimePoints,
+    required this.tier,
+    this.nextTier,
+    this.nextTierAt,
+    required this.pointsToNextTier,
+    required this.minItemPrice,
+    required this.tiers,
+  });
+
+  final bool enabled;
+  final int pointsBalance;
+  final int lifetimePoints;
+  final String tier;
+  final String? nextTier;
+  final int? nextTierAt;
+  final int pointsToNextTier;
+  final int minItemPrice;
+  final List<TierThreshold> tiers;
+
+  /// 0..1 progress from the current tier threshold to the next one.
+  double get progress {
+    if (nextTierAt == null) return 1;
+    final current = tiers
+        .firstWhere((t) => t.tier == tier, orElse: () => TierThreshold(tier, 0))
+        .threshold;
+    final span = nextTierAt! - current;
+    if (span <= 0) return 1;
+    return ((lifetimePoints - current) / span).clamp(0, 1).toDouble();
+  }
+
+  factory LoyaltySummary.fromJson(Map<String, dynamic> j) => LoyaltySummary(
+        enabled: parseBool(j['enabled'], fallback: true),
+        pointsBalance: parseInt(j['points_balance']),
+        lifetimePoints: parseInt(j['lifetime_points']),
+        tier: j['tier']?.toString() ?? 'bronze',
+        nextTier: j['next_tier']?.toString(),
+        nextTierAt: j['next_tier_at'] == null ? null : parseInt(j['next_tier_at']),
+        pointsToNextTier: parseInt(j['points_to_next_tier']),
+        minItemPrice: parseDouble(j['min_item_price']).round(),
+        tiers: ((j['tiers'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((t) => TierThreshold(t['tier']?.toString() ?? '', parseInt(t['threshold'])))
+            .toList(),
+      );
+}
+
+/// Reward from the catalog that can be exchanged for a voucher.
+class PointReward {
+  PointReward({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.type,
+    required this.value,
+    this.maxDiscount,
+    required this.minOrder,
+    required this.pointsCost,
+    required this.minTier,
+    required this.soldOut,
+    required this.tierLocked,
+    required this.canRedeem,
+  });
+
+  final int id;
+  final String name;
+  final String description;
+  final String type; // nominal | percentage
+  final double value;
+  final double? maxDiscount;
+  final double minOrder;
+  final int pointsCost;
+  final String minTier;
+  final bool soldOut;
+  final bool tierLocked;
+  final bool canRedeem;
+
+  factory PointReward.fromJson(Map<String, dynamic> j) => PointReward(
+        id: parseInt(j['id']),
+        name: j['name']?.toString() ?? '',
+        description: j['description']?.toString() ?? '',
+        type: j['type']?.toString() ?? 'nominal',
+        value: parseDouble(j['value']),
+        maxDiscount: j['max_discount'] == null ? null : parseDouble(j['max_discount']),
+        minOrder: parseDouble(j['min_order']),
+        pointsCost: parseInt(j['points_cost']),
+        minTier: j['min_tier']?.toString() ?? 'bronze',
+        soldOut: parseBool(j['sold_out']),
+        tierLocked: parseBool(j['tier_locked']),
+        canRedeem: parseBool(j['can_redeem']),
+      );
+}
+
+class PointHistory {
+  PointHistory({
+    required this.id,
+    required this.type,
+    required this.points,
+    required this.description,
+    this.createdAt,
+  });
+
+  final int id;
+  final String type; // earn | redeem | adjust
+  final int points;
+  final String description;
+  final DateTime? createdAt;
+
+  factory PointHistory.fromJson(Map<String, dynamic> j) => PointHistory(
+        id: parseInt(j['id']),
+        type: j['type']?.toString() ?? '',
+        points: parseInt(j['points']),
+        description: j['description']?.toString() ?? '',
+        createdAt: parseDateTime(j['created_at'])?.toLocal(),
+      );
+}
+
+class UserVoucher {
+  UserVoucher({
+    required this.id,
+    required this.code,
+    required this.name,
+    required this.type,
+    required this.value,
+    this.maxDiscount,
+    required this.minOrder,
+    required this.status,
+    this.expiresAt,
+  });
+
+  final int id;
+  final String code;
+  final String name;
+  final String type;
+  final double value;
+  final double? maxDiscount;
+  final double minOrder;
+  final String status; // available | used | expired
+  final DateTime? expiresAt;
+
+  factory UserVoucher.fromJson(Map<String, dynamic> j) => UserVoucher(
+        id: parseInt(j['id']),
+        code: j['code']?.toString() ?? '',
+        name: j['name']?.toString() ?? '',
+        type: j['type']?.toString() ?? 'nominal',
+        value: parseDouble(j['value']),
+        maxDiscount: j['max_discount'] == null ? null : parseDouble(j['max_discount']),
+        minOrder: parseDouble(j['min_order']),
+        status: j['status']?.toString() ?? 'available',
+        expiresAt: parseDateTime(j['expires_at'])?.toLocal(),
+      );
+}
+
+class AppNotification {
+  AppNotification({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.type,
+    required this.isRead,
+    this.createdAt,
+  });
+
+  final int id;
+  final String title;
+  final String body;
+  final String type;
+  bool isRead;
+  final DateTime? createdAt;
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
+        id: parseInt(j['id']),
+        title: j['title']?.toString() ?? '',
+        body: j['body']?.toString() ?? '',
+        type: j['type']?.toString() ?? '',
+        isRead: parseBool(j['is_read']),
+        createdAt: parseDateTime(j['created_at'])?.toLocal(),
+      );
+}
+
+/// `/orders/quote` result: server-side totals for the current cart.
+class OrderQuote {
+  OrderQuote({
+    required this.subtotal,
+    required this.voucherDiscount,
+    required this.total,
+    required this.estimatedPoints,
+  });
+
+  final double subtotal;
+  final double voucherDiscount;
+  final double total;
+  final int estimatedPoints;
+
+  factory OrderQuote.fromJson(Map<String, dynamic> j) => OrderQuote(
+        subtotal: parseDouble(j['subtotal']),
+        voucherDiscount: parseDouble(j['voucher_discount']),
+        total: parseDouble(j['total']),
+        estimatedPoints: parseInt(j['estimated_points']),
+      );
 }

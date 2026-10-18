@@ -7,6 +7,8 @@ import 'models.dart';
 import 'services/api_services.dart';
 import 'core/network/api_client.dart';
 
+part 'loyalty_screens.dart';
+
 final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
 
 void main() async {
@@ -36,7 +38,7 @@ class CofflowApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavKey,
-      title: 'Cofflow.',
+      title: 'Konco Space',
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFFF7F7F5),
@@ -64,6 +66,8 @@ class AppState {
 
   static List<CartItem> cart = [];
   static Order? currentOrder;
+  /// Point voucher chosen for the next checkout.
+  static UserVoucher? selectedVoucher;
 
   static Timer? _pollTimer;
 
@@ -90,9 +94,11 @@ class AppState {
       cartItems: List.from(cart),
       paymentMethod: paymentMethod,
       paymentChannel: paymentChannel,
+      voucherId: selectedVoucher?.id,
     );
     currentOrder = order;
     cart = [];
+    selectedVoucher = null;
     return order;
   }
 
@@ -197,21 +203,10 @@ class _SplashScreenState extends State<SplashScreen>
           children: [
             ScaleTransition(
               scale: _scale,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                    color: kBrandAccent, borderRadius: BorderRadius.circular(32)),
-                child: const Icon(LucideIcons.coffee, color: kBrandDark, size: 48),
-              ),
+              child: Image.asset('assets/images/logo_konco_space_white.png',
+                  width: 220, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
             ),
             const SizedBox(height: 24),
-            Text('Cofflow.',
-                style: GoogleFonts.plusJakartaSans(
-                    color: Colors.white,
-                    fontSize: 40,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: -2)),
-            const SizedBox(height: 8),
             const Text('Pengalaman Kopi Berkelas',
                 style: TextStyle(
                     color: kBrandAccent,
@@ -283,19 +278,8 @@ class _LoginScreenState extends State<LoginScreen> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: kBrandDark, borderRadius: BorderRadius.circular(28)),
-              child: const Icon(LucideIcons.coffee, color: kBrandAccent, size: 40),
-            ),
-            const SizedBox(height: 24),
-            Text('Cofflow.',
-                style: GoogleFonts.plusJakartaSans(
-                    color: kBrandDark,
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: -1.5)),
+            Image.asset('assets/images/logo_konco_space.png',
+                height: 96, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
             const SizedBox(height: 48),
             TextField(
               controller: _emailCtrl,
@@ -486,20 +470,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   onPressed: () => Navigator.pop(context),
                   padding: EdgeInsets.zero),
               const SizedBox(height: 24),
-              Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                      color: kBrandDark, borderRadius: BorderRadius.circular(20)),
-                  child: const Icon(LucideIcons.coffee, color: kBrandAccent, size: 32)),
-              const SizedBox(height: 20),
-              Text('Buat Akun Baru',
-                  style: GoogleFonts.plusJakartaSans(
-                      color: kBrandDark,
-                      fontSize: 30,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: -1.5)),
-              const Text('Bergabung dan nikmati kopi terbaik',
-                  style: TextStyle(color: Colors.grey, fontSize: 13)),
+              Center(
+                child: Column(children: [
+                  Image.asset('assets/images/logo_konco_space.png',
+                      height: 64, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
+                  const SizedBox(height: 20),
+                  Text('Buat Akun Baru',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.plusJakartaSans(
+                          color: kBrandDark,
+                          fontSize: 30,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: -1.5)),
+                  const Text('Bergabung dan nikmati kopi terbaik',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, fontSize: 13)),
+                ]),
+              ),
               const SizedBox(height: 36),
               _label('NAMA LENGKAP'),
               const SizedBox(height: 8),
@@ -684,12 +671,20 @@ class StickyHeader extends StatelessWidget {
   final String title, subtitle;
   final IconData icon;
   final bool hasNotification;
+  /// When set, shows this asset image in place of the [title] text.
+  final String? logoAsset;
+  final VoidCallback? onIconTap;
+  /// Unread count shown as a badge on the icon (0 hides it).
+  final int badgeCount;
   const StickyHeader(
       {super.key,
       required this.title,
       required this.subtitle,
       required this.icon,
-      this.hasNotification = false});
+      this.hasNotification = false,
+      this.logoAsset,
+      this.onIconTap,
+      this.badgeCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -704,12 +699,19 @@ class StickyHeader extends StatelessWidget {
           border: Border(bottom: BorderSide(color: Colors.black.withValues(alpha: 0.05)))),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: GoogleFonts.plusJakartaSans(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: kBrandDark,
-                  letterSpacing: -1)),
+          if (logoAsset != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Image.asset(logoAsset!,
+                  height: 32, fit: BoxFit.contain, semanticLabel: title),
+            )
+          else
+            Text(title,
+                style: GoogleFonts.plusJakartaSans(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: kBrandDark,
+                    letterSpacing: -1)),
           Text(subtitle,
               style: const TextStyle(
                   fontSize: 10,
@@ -717,16 +719,42 @@ class StickyHeader extends StatelessWidget {
                   color: Colors.grey,
                   letterSpacing: 1)),
         ]),
-        Stack(children: [
-          Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: const Color(0xFFF1F1F1))),
-              child: Icon(icon, size: 18, color: kBrandDark)),
-          if (hasNotification)
+        Stack(clipBehavior: Clip.none, children: [
+          Material(
+            color: Colors.white,
+            shape: const CircleBorder(side: BorderSide(color: Color(0xFFF1F1F1))),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onIconTap,
+              child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Icon(icon, size: 18, color: kBrandDark)),
+            ),
+          ),
+          if (badgeCount > 0)
+            Positioned(
+              top: -4,
+              right: -4,
+              child: IgnorePointer(
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 20),
+                  height: 20,
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white, width: 2)),
+                  child: Text(badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+            )
+          else if (hasNotification)
             Positioned(
                 top: 10,
                 right: 10,
@@ -758,12 +786,41 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Product> _products = [];
   bool _loading = true;
   String? _error;
+  int _unread = 0;
+  Timer? _notifTimer;
 
   @override
   void initState() {
     super.initState();
     _loadCategories();
     _loadProducts();
+    _loadUnread();
+    _notifTimer = Timer.periodic(const Duration(seconds: 20), (_) => _loadUnread());
+  }
+
+  @override
+  void dispose() {
+    _notifTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadUnread() async {
+    try {
+      final n = await NotificationService.unreadCount();
+      if (mounted && n != _unread) setState(() => _unread = n);
+    } catch (_) {
+      // Badge is best-effort; retry on next tick.
+    }
+  }
+
+  Future<void> _openNotifications() async {
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const NotificationsScreen()));
+    _loadUnread();
+  }
+
+  void _openLoyalty() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const LoyaltyScreen()));
   }
 
   Future<void> _loadCategories() async {
@@ -803,11 +860,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      const StickyHeader(
-          title: 'Cofflow.',
+      StickyHeader(
+          title: 'Konco Space',
+          logoAsset: 'assets/images/logo_konco_space.png',
           subtitle: 'Kopi Terbaik Untukmu',
           icon: LucideIcons.bell,
-          hasNotification: true),
+          badgeCount: _unread,
+          onIconTap: _openNotifications),
       Expanded(
           child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(vertical: 24),
@@ -946,7 +1005,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         letterSpacing: -1)),
                 const SizedBox(height: 20),
                 ElevatedButton(
-                  onPressed: () {},
+                  onPressed: _openLoyalty,
                   style: ElevatedButton.styleFrom(
                       backgroundColor: kBrandAccent,
                       foregroundColor: kBrandDark,
@@ -1002,6 +1061,10 @@ class ProductCard extends StatelessWidget {
                   fontWeight: FontWeight.bold,
                   fontSize: 9,
                   letterSpacing: 1)),
+          if (product.points > 0) ...[
+            const SizedBox(height: 6),
+            _PointsBadge(points: product.points),
+          ],
           const SizedBox(height: 12),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text('Rp${product.price ~/ 1000}K',
@@ -1016,6 +1079,30 @@ class ProductCard extends StatelessWidget {
           ]),
         ]),
       ),
+    );
+  }
+}
+
+/// Small "+N poin" pill shown on menu items.
+class _PointsBadge extends StatelessWidget {
+  const _PointsBadge({required this.points, this.label = 'poin'});
+  final int points;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+          color: kBrandAccent.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(100)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(LucideIcons.star, size: 11, color: kBrandDark),
+        const SizedBox(width: 4),
+        Text('+$points $label',
+            style: const TextStyle(
+                fontSize: 10, fontWeight: FontWeight.bold, color: kBrandDark)),
+      ]),
     );
   }
 }
@@ -1089,6 +1176,12 @@ class _DetailScreenState extends State<DetailScreen> {
           Padding(
               padding: const EdgeInsets.all(24),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (widget.product.points > 0) ...[
+                  _PointsBadge(
+                      points: widget.product.points * _quantity,
+                      label: 'poin member${_quantity > 1 ? ' ($_quantity item)' : ''}'),
+                  const SizedBox(height: 20),
+                ],
                 const Text('Jenis Susu', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 Row(
@@ -1200,8 +1293,70 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _placing = false;
+  OrderQuote? _quote;
+  String? _voucherError;
+  int _quoteSeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshQuote();
+  }
+
+  /// Re-prices the cart on the server while a voucher is selected, so the
+  /// shown discount and min. order check match what checkout will charge.
+  Future<void> _refreshQuote() async {
+    final voucher = AppState.selectedVoucher;
+    if (voucher == null || AppState.cart.isEmpty) {
+      if (_quote != null || _voucherError != null) {
+        setState(() {
+          _quote = null;
+          _voucherError = null;
+        });
+      }
+      return;
+    }
+    final seq = ++_quoteSeq;
+    try {
+      final q = await OrderService.quote(
+          cartItems: List.from(AppState.cart), voucherId: voucher.id);
+      if (!mounted || seq != _quoteSeq) return;
+      setState(() {
+        _quote = q;
+        _voucherError = null;
+      });
+    } on ApiException catch (e) {
+      if (!mounted || seq != _quoteSeq) return;
+      setState(() {
+        _quote = null;
+        _voucherError = e.message;
+      });
+    }
+  }
+
+  void _cartChanged(VoidCallback change) {
+    setState(change);
+    _refreshQuote();
+  }
+
+  Future<void> _pickVoucher() async {
+    final picked = await showModalBottomSheet<_VoucherPick>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => VoucherPickerSheet(selectedId: AppState.selectedVoucher?.id),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => AppState.selectedVoucher = picked.voucher);
+    _refreshQuote();
+  }
 
   Future<void> _checkout() async {
+    if (AppState.selectedVoucher != null && _voucherError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Voucher belum bisa dipakai: $_voucherError')));
+      return;
+    }
     final choice = await showModalBottomSheet<_PaymentChoice>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1239,6 +1394,9 @@ class _CartScreenState extends State<CartScreen> {
   @override
   Widget build(BuildContext context) {
     int subtotal = AppState.cart.fold(0, (s, i) => s + i.product.price * i.quantity);
+    final cartPoints =
+        AppState.cart.fold<int>(0, (s, i) => s + i.product.points * i.quantity);
+    final voucher = AppState.selectedVoucher;
 
     return Column(children: [
       StickyHeader(
@@ -1292,19 +1450,19 @@ class _CartScreenState extends State<CartScreen> {
                         Column(children: [
                           IconButton(
                               icon: const Icon(LucideIcons.plus, size: 16),
-                              onPressed: () => setState(() => item.quantity++)),
+                              onPressed: () => _cartChanged(() => item.quantity++)),
                           Text('${item.quantity}',
                               style: const TextStyle(fontWeight: FontWeight.bold)),
                           IconButton(
                               icon: const Icon(LucideIcons.minus, size: 16),
-                              onPressed: () => setState(() =>
+                              onPressed: () => _cartChanged(() =>
                                   item.quantity = (item.quantity - 1).clamp(1, 99))),
                         ]),
                         IconButton(
                             icon: const Icon(LucideIcons.trash2,
                                 color: Colors.red, size: 18),
                             onPressed: () =>
-                                setState(() => AppState.cart.removeAt(i))),
+                                _cartChanged(() => AppState.cart.removeAt(i))),
                       ]),
                     );
                   },
@@ -1316,7 +1474,20 @@ class _CartScreenState extends State<CartScreen> {
               color: kBrandMuted,
               borderRadius: BorderRadius.vertical(top: Radius.circular(32))),
           child: Column(children: [
-            _summaryRow('SUBTOTAL', 'Rp${subtotal ~/ 1000}K'),
+            _voucherTile(),
+            const SizedBox(height: 16),
+            _summaryRow('SUBTOTAL', _rupiah(_quote?.subtotal ?? subtotal)),
+            if (voucher != null && _quote != null) ...[
+              const SizedBox(height: 8),
+              _summaryRow('DISKON VOUCHER', '-${_rupiah(_quote!.voucherDiscount)}',
+                  valueColor: Colors.green.shade700),
+              const SizedBox(height: 8),
+              _summaryRow('TOTAL', _rupiah(_quote!.total)),
+            ],
+            if (cartPoints > 0) ...[
+              const SizedBox(height: 8),
+              _summaryRow('POIN DIDAPAT', '+$cartPoints poin'),
+            ],
             const SizedBox(height: 4),
             const Text('Pajak & total final dihitung oleh server',
                 style: TextStyle(fontSize: 9, color: Colors.grey)),
@@ -1339,13 +1510,68 @@ class _CartScreenState extends State<CartScreen> {
     ]);
   }
 
-  Widget _summaryRow(String label, String value) =>
+  Widget _summaryRow(String label, String value, {Color? valueColor}) =>
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label,
             style: const TextStyle(
                 fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: valueColor)),
       ]);
+
+  Widget _voucherTile() {
+    final v = AppState.selectedVoucher;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: _placing ? null : _pickVoucher,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                  color: _voucherError != null
+                      ? Colors.redAccent
+                      : v != null
+                          ? kBrandAccent
+                          : const Color(0xFFE6E6E3))),
+          child: Row(children: [
+            const Icon(LucideIcons.ticket, size: 20, color: kBrandDark),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(v == null ? 'Pakai voucher poin' : v.name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, color: kBrandDark, fontSize: 13)),
+                Text(
+                    _voucherError ??
+                        (v == null
+                            ? 'Tukar poin jadi voucher, lalu pakai di sini'
+                            : 'Kode ${v.code}'),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: _voucherError != null ? Colors.redAccent : Colors.grey)),
+              ]),
+            ),
+            if (v != null)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(LucideIcons.x, size: 18),
+                onPressed: _placing
+                    ? null
+                    : () {
+                        setState(() => AppState.selectedVoucher = null);
+                        _refreshQuote();
+                      },
+              )
+            else
+              const Icon(LucideIcons.chevronRight, size: 18, color: Colors.grey),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1829,10 +2055,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       : 'Belum diisi'),
                             ])),
                     const SizedBox(height: 32),
+                    _menuItem('Poin & Membership', LucideIcons.award, () {
+                      Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const LoyaltyScreen()));
+                    }),
                     _menuItem('Riwayat Pesanan', LucideIcons.history,
                         () => setState(() => _showHistory = true)),
-                    _menuItem('Pengaturan', LucideIcons.settings, () {}),
-                    _menuItem('Bantuan', LucideIcons.helpCircle, () {}),
+                    _menuItem('Pengaturan', LucideIcons.settings, () {
+                      Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const SettingsScreen()));
+                    }),
+                    _menuItem('Bantuan', LucideIcons.helpCircle, () {
+                      Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const HelpScreen()));
+                    }),
                     _menuItem('Keluar', LucideIcons.logOut, () async {
                       AppState.stopPolling();
                       await AuthService.signOut();
@@ -1961,4 +2197,522 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             fontWeight: FontWeight.bold, color: color ?? kBrandDark))),
                 const Icon(LucideIcons.chevronRight, color: Colors.grey, size: 18),
               ])));
+}
+
+// ─────────────────────────────────────────────────────────
+// SETTINGS SCREEN — change password via /auth/change-password
+// ─────────────────────────────────────────────────────────
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _oldCtrl = TextEditingController();
+  final _newCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _saving = false;
+  bool _obscure = true;
+
+  @override
+  void dispose() {
+    _oldCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      await AuthService.changePassword(
+          oldPassword: _oldCtrl.text, newPassword: _newCtrl.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Password berhasil diubah')));
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  InputDecoration _decoration(String label) => InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFFF1F1F1))),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFFF1F1F1))),
+        suffixIcon: IconButton(
+            icon: Icon(_obscure ? LucideIcons.eyeOff : LucideIcons.eye,
+                size: 18, color: Colors.grey),
+            onPressed: () => setState(() => _obscure = !_obscure)),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(children: [
+        const _SubPageHeader(title: 'pengaturan.'),
+        Expanded(
+            child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Form(
+            key: _formKey,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('UBAH PASSWORD',
+                  style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey,
+                      letterSpacing: 1)),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _oldCtrl,
+                obscureText: _obscure,
+                decoration: _decoration('Password lama'),
+                validator: (v) =>
+                    (v == null || v.isEmpty) ? 'Wajib diisi' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _newCtrl,
+                obscureText: _obscure,
+                decoration: _decoration('Password baru'),
+                validator: (v) => (v == null || v.length < 8)
+                    ? 'Minimal 8 karakter'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _confirmCtrl,
+                obscureText: _obscure,
+                decoration: _decoration('Konfirmasi password baru'),
+                validator: (v) =>
+                    v != _newCtrl.text ? 'Password tidak sama' : null,
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _saving ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: kBrandDark,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20))),
+                  child: _saving
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Text('SIMPAN',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ]),
+          ),
+        )),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// HELP SCREEN — static FAQ
+// ─────────────────────────────────────────────────────────
+class HelpScreen extends StatelessWidget {
+  const HelpScreen({super.key});
+
+  static const _faqs = [
+    (
+      'Bagaimana cara memesan?',
+      'Pilih menu di beranda, atur jumlah dan catatan, lalu tambahkan ke '
+          'keranjang. Buka keranjang dan tekan tombol pesan untuk checkout.'
+    ),
+    (
+      'Metode pembayaran apa saja yang tersedia?',
+      'Kamu bisa membayar tunai di kasir, QRIS, atau Virtual Account '
+          '(BCA, BNI, BRI, Mandiri).'
+    ),
+    (
+      'Bagaimana melihat status pesanan?',
+      'Setelah memesan, buka tab pesanan untuk melihat nomor antrean dan '
+          'status pesanan yang diperbarui otomatis.'
+    ),
+    (
+      'Di mana riwayat pesanan saya?',
+      'Buka Profil lalu pilih Riwayat Pesanan.'
+    ),
+    (
+      'Lupa password?',
+      'Hubungi kasir, admin di outlet, atau Chat CS untuk bantuan reset password. '
+          'Jika masih ingat password lama, ubah lewat menu Pengaturan.'
+    ),
+  ];
+
+  Widget _chatCard(BuildContext context) => GestureDetector(
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const SupportChatScreen())),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 24),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+              color: kBrandDark, borderRadius: BorderRadius.circular(24)),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: kBrandAccent.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(16)),
+              child: const Icon(LucideIcons.messageCircle,
+                  color: kBrandAccent, size: 22),
+            ),
+            const SizedBox(width: 16),
+            const Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Chat Customer Service',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15)),
+                    SizedBox(height: 2),
+                    Text('Tanya langsung ke tim kami',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  ]),
+            ),
+            const Icon(LucideIcons.chevronRight, color: Colors.white54, size: 18),
+          ]),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(children: [
+        const _SubPageHeader(title: 'bantuan.'),
+        Expanded(
+            child: ListView.builder(
+          padding: const EdgeInsets.all(24),
+          itemCount: _faqs.length + 1,
+          itemBuilder: (ctx, index) {
+            if (index == 0) return _chatCard(ctx);
+            final (q, a) = _faqs[index - 1];
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Material(
+                color: Colors.white,
+                clipBehavior: Clip.antiAlias,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: const BorderSide(color: Color(0xFFF1F1F1))),
+                child: Theme(
+                  data: Theme.of(ctx).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+                    childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    iconColor: kBrandDark,
+                    collapsedIconColor: Colors.grey,
+                    title: Text(q,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: kBrandDark)),
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(a,
+                            style: const TextStyle(
+                                fontSize: 13, color: Colors.black54, height: 1.5)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        )),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// CS CHAT — /support/messages, polled every 5s
+// ─────────────────────────────────────────────────────────
+class SupportChatScreen extends StatefulWidget {
+  const SupportChatScreen({super.key});
+  @override
+  State<SupportChatScreen> createState() => _SupportChatScreenState();
+}
+
+class _SupportChatScreenState extends State<SupportChatScreen> {
+  final _ctrl = TextEditingController();
+  final _scroll = ScrollController();
+  final List<SupportMessage> _messages = [];
+  Timer? _timer;
+  bool _loading = true;
+  bool _sending = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _poll());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final list = await SupportService.fetchMessages();
+      if (!mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(list);
+        _loading = false;
+        _error = null;
+      });
+      _scrollToEnd();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _poll() async {
+    if (_loading) return;
+    final lastId = _messages.isEmpty ? null : _messages.last.id;
+    try {
+      final fresh = await SupportService.fetchMessages(afterId: lastId);
+      final known = _messages.map((m) => m.id).toSet();
+      final added = fresh.where((m) => !known.contains(m.id)).toList();
+      if (added.isEmpty || !mounted) return;
+      setState(() => _messages.addAll(added));
+      _scrollToEnd();
+    } catch (_) {
+      // Polling errors are silent; next tick retries.
+    }
+  }
+
+  Future<void> _send() async {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      final msg = await SupportService.send(text);
+      if (!mounted) return;
+      _ctrl.clear();
+      setState(() {
+        if (!_messages.any((m) => m.id == msg.id)) _messages.add(msg);
+      });
+      _scrollToEnd();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(_scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      }
+    });
+  }
+
+  String _time(DateTime? d) {
+    if (d == null) return '';
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(d.day)}/${two(d.month)} ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  Widget _bubble(SupportMessage m) {
+    final mine = m.fromCustomer;
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: mine ? kBrandDark : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(mine ? 18 : 4),
+            bottomRight: Radius.circular(mine ? 4 : 18),
+          ),
+          border: mine ? null : Border.all(color: const Color(0xFFF1F1F1)),
+        ),
+        child: Column(
+            crossAxisAlignment:
+                mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              if (!mine)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 2),
+                  child: Text('CS Konco Space',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: kBrandAccent)),
+                ),
+              Text(m.body,
+                  style: TextStyle(
+                      fontSize: 14,
+                      height: 1.4,
+                      color: mine ? Colors.white : kBrandDark)),
+              const SizedBox(height: 4),
+              Text(_time(m.createdAt),
+                  style: TextStyle(
+                      fontSize: 9,
+                      color: mine ? Colors.white54 : Colors.grey)),
+            ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBrandLight,
+      body: Column(children: [
+        const _SubPageHeader(title: 'chat cs.'),
+        Expanded(
+          child: _loading
+              ? const Center(
+                  child: CircularProgressIndicator(color: kBrandDark))
+              : _error != null
+                  ? Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Text(_error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.grey)),
+                      TextButton(
+                          onPressed: () {
+                            setState(() => _loading = true);
+                            _load();
+                          },
+                          child: const Text('Coba lagi')),
+                    ]))
+                  : _messages.isEmpty
+                      ? const Center(
+                          child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Text(
+                              'Halo! Ada yang bisa kami bantu?\n'
+                              'Tulis pertanyaanmu, tim CS akan membalas secepatnya.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.grey, height: 1.5)),
+                        ))
+                      : ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.all(20),
+                          itemCount: _messages.length,
+                          itemBuilder: (_, i) => _bubble(_messages[i]),
+                        ),
+        ),
+        Container(
+          padding: EdgeInsets.fromLTRB(
+              16, 10, 10, MediaQuery.of(context).padding.bottom + 10),
+          decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(
+                  top: BorderSide(
+                      color: Colors.black.withValues(alpha: 0.05)))),
+          child: Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                minLines: 1,
+                maxLines: 4,
+                maxLength: 2000,
+                textInputAction: TextInputAction.newline,
+                decoration: InputDecoration(
+                  hintText: 'Tulis pesan...',
+                  counterText: '',
+                  filled: true,
+                  fillColor: kBrandMuted,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filled(
+              onPressed: _sending ? null : _send,
+              style: IconButton.styleFrom(backgroundColor: kBrandDark),
+              icon: _sending
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Icon(LucideIcons.send, color: Colors.white, size: 18),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _SubPageHeader extends StatelessWidget {
+  const _SubPageHeader({required this.title});
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Container(
+      padding: EdgeInsets.only(
+          top: MediaQuery.of(context).padding.top + 10,
+          bottom: 20,
+          left: 20,
+          right: 24),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(
+              bottom: BorderSide(color: Colors.black.withValues(alpha: 0.05)))),
+      child: Row(children: [
+        IconButton(
+            icon: const Icon(LucideIcons.chevronLeft),
+            onPressed: () => Navigator.pop(context)),
+        const SizedBox(width: 8),
+        Text(title,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+      ]));
 }

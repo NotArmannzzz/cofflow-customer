@@ -6,6 +6,7 @@ class ApiEndpoints {
   static const String login = '/auth/login';
   static const String logout = '/auth/logout';
   static const String me = '/auth/me';
+  static const String changePassword = '/auth/change-password';
 
   // Menu (public)
   static const String menus = '/menus';
@@ -14,7 +15,25 @@ class ApiEndpoints {
 
   // Orders
   static const String orders = '/orders';
+  static const String orderQuote = '/orders/quote';
   static String orderDetail(int id) => '/orders/$id';
   static String orderPaymentStatus(int id) => '/orders/$id/payment-status';
   static String cancelOrder(int id) => '/orders/$id';
+
+  // Loyalty / membership
+  static const String loyalty = '/loyalty';
+  static const String loyaltyHistory = '/loyalty/history';
+  static const String loyaltyRewards = '/loyalty/rewards';
+  static String redeemReward(int id) => '/loyalty/rewards/$id/redeem';
+  static const String loyaltyVouchers = '/loyalty/vouchers';
+
+  // Notifications
+  static const String notifications = '/notifications';
+  static String notificationRead(int id) => '/notifications/$id/read';
+  static const String notificationsReadAll = '/notifications/mark-all-read';
+  static const String notificationsUnread = '/notifications/unread-count';
+
+  // Customer service chat
+  static const String supportMessages = '/support/messages';
+  static const String supportUnread = '/support/unread-count';
 }
