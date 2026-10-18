@@ -1122,6 +1122,7 @@ Widget _menuImage(String url, {double? width, double? height}) {
     width: width ?? double.infinity,
     height: height,
     fit: BoxFit.cover,
+    webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
     errorBuilder: (_, _, _) => placeholder,
   );
 }
