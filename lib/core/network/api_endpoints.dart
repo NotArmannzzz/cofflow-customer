@@ -7,6 +7,10 @@ class ApiEndpoints {
   static const String logout = '/auth/logout';
   static const String me = '/auth/me';
   static const String changePassword = '/auth/change-password';
+  static const String updateProfile = '/auth/profile';
+
+  // Info toko + FAQ (public)
+  static const String appInfo = '/app-info';
 
   // Menu (public)
   static const String menus = '/menus';

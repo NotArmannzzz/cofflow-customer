@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'dart:async';
@@ -8,6 +9,7 @@ import 'services/api_services.dart';
 import 'core/network/api_client.dart';
 
 part 'loyalty_screens.dart';
+part 'settings_help_screens.dart';
 
 final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
 
@@ -17,6 +19,8 @@ void main() async {
   // On 401 the interceptor clears the token; bounce the user to login.
   ApiClient.onUnauthorized = () async {
     AppState.stopPolling();
+    AppState.activeOrders.clear();
+    AppState.cart.clear();
     rootNavKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (r) => false,
@@ -25,11 +29,11 @@ void main() async {
 
   final loggedIn = await AuthService.isLoggedIn();
 
-  runApp(CofflowApp(loggedIn: loggedIn));
+  runApp(KoncoSpaceApp(loggedIn: loggedIn));
 }
 
-class CofflowApp extends StatelessWidget {
-  const CofflowApp({super.key, required this.loggedIn});
+class KoncoSpaceApp extends StatelessWidget {
+  const KoncoSpaceApp({super.key, required this.loggedIn});
 
   final bool loggedIn;
 
@@ -49,7 +53,9 @@ class CofflowApp extends StatelessWidget {
           secondary: kBrandAccent,
         ),
       ),
-      home: loggedIn ? MainNavigation(key: AppState.navKey) : const SplashScreen(),
+      home: loggedIn
+          ? MainNavigation(key: AppState.navKey)
+          : const SplashScreen(),
     );
   }
 }
@@ -57,35 +63,294 @@ class CofflowApp extends StatelessWidget {
 // --- Brand Colors ---
 const kBrandDark = Color(0xFF1C2C22);
 const kBrandAccent = Color(0xFFD4AF37);
+const kBrandBrown = Color(0xFF8D5B4C);
 const kBrandLight = Color(0xFFF7F7F5);
 const kBrandMuted = Color(0xFFEEEEEB);
 
+class CartNotificationToast {
+  static OverlayEntry? _entry;
+  static Timer? _timer;
+  static _CartToastWidgetState? _activeState;
+
+  static void show(BuildContext context, {required String itemName}) {
+    _timer?.cancel();
+
+    // Jika toast sedang aktif, cukup perbarui nama item dan reset timer 5 detik
+    if (_activeState != null && _activeState!.mounted) {
+      _activeState!.update(itemName);
+      _timer = Timer(const Duration(seconds: 5), () {
+        _activeState?.hide();
+      });
+      return;
+    }
+
+    _safeRemove();
+
+    final overlay =
+        rootNavKey.currentState?.overlay ?? Overlay.maybeOf(context);
+    if (overlay == null) return;
+
+    late OverlayEntry newEntry;
+    newEntry = OverlayEntry(
+      builder: (ctx) => _CartToastWidget(
+        itemName: itemName,
+        onMounted: (state) => _activeState = state,
+        onDismissed: () {
+          if (_entry == newEntry) {
+            _safeRemove();
+          }
+        },
+      ),
+    );
+
+    _entry = newEntry;
+    overlay.insert(newEntry);
+
+    _timer = Timer(const Duration(seconds: 5), () {
+      _activeState?.hide();
+    });
+  }
+
+  static void dismiss() {
+    _timer?.cancel();
+    if (_activeState != null && _activeState!.mounted) {
+      _activeState?.hide();
+    } else {
+      _safeRemove();
+    }
+  }
+
+  static void _safeRemove() {
+    if (_entry != null) {
+      try {
+        _entry?.remove();
+      } catch (_) {}
+      _entry = null;
+      _activeState = null;
+    }
+  }
+}
+
+class _CartToastWidget extends StatefulWidget {
+  final String itemName;
+  final ValueChanged<_CartToastWidgetState> onMounted;
+  final VoidCallback onDismissed;
+
+  const _CartToastWidget({
+    required this.itemName,
+    required this.onMounted,
+    required this.onDismissed,
+  });
+
+  @override
+  State<_CartToastWidget> createState() => _CartToastWidgetState();
+}
+
+class _CartToastWidgetState extends State<_CartToastWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Offset> _offsetAnimation;
+  late String _itemName;
+  bool _isHiding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _itemName = widget.itemName;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+    );
+    _offsetAnimation =
+        Tween<Offset>(begin: const Offset(0, 2.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _controller,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          ),
+        );
+
+    widget.onMounted(this);
+    _controller.forward();
+  }
+
+  void update(String newItemName) {
+    if (mounted) {
+      setState(() => _itemName = newItemName);
+      if (_isHiding) {
+        _isHiding = false;
+        _controller.forward();
+      }
+    }
+  }
+
+  Future<void> hide() async {
+    if (_isHiding || !mounted) return;
+    _isHiding = true;
+    try {
+      await _controller.reverse();
+    } catch (_) {}
+    if (mounted) {
+      widget.onDismissed();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 98.0;
+
+    return Positioned(
+      bottom: bottomPadding,
+      left: 16,
+      right: 16,
+      child: SlideTransition(
+        position: _offsetAnimation,
+        child: GestureDetector(
+          onVerticalDragEnd: (details) {
+            if (details.primaryVelocity != null &&
+                details.primaryVelocity! > 50) {
+              hide();
+            }
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: kBrandDark,
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: kBrandAccent.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      LucideIcons.check,
+                      color: kBrandAccent,
+                      size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _itemName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          'Ditambahkan ke keranjang',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.75),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  InkWell(
+                    onTap: () {
+                      CartNotificationToast.dismiss();
+                      AppState.changeTab(2);
+                    },
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kBrandAccent,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Text(
+                        'Lihat keranjang',
+                        style: TextStyle(
+                          color: kBrandDark,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AppState {
-  static final GlobalKey<_MainNavigationState> navKey =
-      GlobalKey<_MainNavigationState>();
+  static final GlobalKey<MainNavigationState> navKey =
+      GlobalKey<MainNavigationState>();
 
   static List<CartItem> cart = [];
-  static Order? currentOrder;
+
   /// Point voucher chosen for the next checkout.
   static UserVoucher? selectedVoucher;
 
+  /// Semua order yang masih aktif (pending / processing / ready).
+  /// Diganti dari single `currentOrder` agar bisa lacak banyak order sekaligus.
+  static List<Order> activeOrders = [];
+
   static Timer? _pollTimer;
 
-  static void changeTab(int i) => navKey.currentState?.updateIndex(i);
+  static void changeTab(int i) {
+    CartNotificationToast.dismiss();
+    navKey.currentState?.updateIndex(i);
+  }
+
   static void refreshUI() => navKey.currentState?.refresh();
 
-  static void addToCart(CartItem newItem) {
+  /// Tambah item ke keranjang tanpa memaksa pindah tab.
+  /// Tampilkan notifikasi animasi yang otomatis meluncur turun kebawah dalam 5 detik.
+  static void addToCart(CartItem newItem, BuildContext context) {
     int index = cart.indexWhere((i) => i.uniqueId == newItem.uniqueId);
     if (index != -1) {
       cart[index].quantity += newItem.quantity;
     } else {
       cart.add(newItem);
     }
-    changeTab(2);
+    // Tampilkan notifikasi animasi meluncur turun kebawah dalam 5 detik
+    CartNotificationToast.show(context, itemName: newItem.product.name);
   }
 
-  /// Sends the order to the backend. Returns the created [Order] (which holds
-  /// payment fields for qris/VA flows). Throws [ApiException] on failure.
+  /// Kirim order ke backend. Order baru ditambahkan ke [activeOrders].
+  /// Throws [ApiException] on failure.
   static Future<Order> submitOrder({
     required String paymentMethod,
     String? paymentChannel,
@@ -96,36 +361,58 @@ class AppState {
       paymentChannel: paymentChannel,
       voucherId: selectedVoucher?.id,
     );
-    currentOrder = order;
+    activeOrders.add(order);
     cart = [];
     selectedVoucher = null;
     return order;
   }
 
-  /// Begins tracking the active order via polling (backend has no realtime).
+  /// Mulai polling semua active orders setiap 5 detik.
+  /// Update status di [activeOrders], hapus yang sudah completed/cancelled.
   static void startPolling(BuildContext context) {
     stopPolling();
-    final id = currentOrder?.id;
-    if (id == null) return;
+    if (activeOrders.isEmpty) return;
 
     _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      try {
-        final fresh = await OrderService.fetchOrder(id);
-        currentOrder = currentOrder?.copyWith(
+      if (activeOrders.isEmpty) {
+        stopPolling();
+        return;
+      }
+
+      // Poll semua active orders sekaligus (paralel)
+      final futures = activeOrders.map((o) => OrderService.fetchOrder(o.id));
+      final results = await Future.wait(futures, eagerError: false);
+
+      bool needsRefresh = false;
+      final List<Order> stillActive = [];
+
+      for (int i = 0; i < results.length; i++) {
+        final fresh = results[i];
+        if (fresh == null) {
+          stillActive.add(activeOrders[i]); // keep, retry next tick
+          continue;
+        }
+
+        // Update status di list
+        activeOrders[i] = activeOrders[i].copyWith(
           status: fresh.status,
           paymentStatus: fresh.paymentStatus,
         );
-        refreshUI();
+        needsRefresh = true;
 
         if (fresh.status == 'completed') {
-          stopPolling();
-          if (context.mounted) _showDoneDialog(context);
+          if (context.mounted) _showDoneDialog(context, fresh);
+          // Order selesai — tidak masukkan ke stillActive (dihapus dari list aktif)
         } else if (fresh.status == 'cancelled') {
-          stopPolling();
+          // Dibatalkan — hapus dari list aktif
+        } else {
+          stillActive.add(activeOrders[i]);
         }
-      } catch (_) {
-        // transient; next tick retries
       }
+
+      activeOrders = stillActive;
+      if (needsRefresh && context.mounted) refreshUI();
+      if (activeOrders.isEmpty) stopPolling();
     });
   }
 
@@ -134,23 +421,29 @@ class AppState {
     _pollTimer = null;
   }
 
-  static void _showDoneDialog(BuildContext context) {
+  static void _showDoneDialog(BuildContext context, Order order) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('Sukses!', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text('Pesanan kamu sudah selesai. Terima kasih!'),
+        title: const Text(
+          'Sukses!',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Pesanan #${order.queueNumber} sudah selesai. Terima kasih!',
+        ),
         actions: [
           TextButton(
             onPressed: () {
-              currentOrder = null;
               refreshUI();
               Navigator.pop(ctx);
             },
-            child: const Text('TUTUP',
-                style: TextStyle(color: kBrandDark, fontWeight: FontWeight.bold)),
+            child: const Text(
+              'TUTUP',
+              style: TextStyle(color: kBrandDark, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -176,14 +469,20 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
     _controller = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500));
-    _scale = Tween<double>(begin: 0.5, end: 1.0).animate(
-        CurvedAnimation(parent: _controller, curve: Curves.elasticOut));
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+    _scale = Tween<double>(
+      begin: 0.5,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.elasticOut));
     _controller.forward();
 
     Timer(const Duration(milliseconds: 2500), () {
       Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
     });
   }
 
@@ -203,16 +502,22 @@ class _SplashScreenState extends State<SplashScreen>
           children: [
             ScaleTransition(
               scale: _scale,
-              child: Image.asset('assets/images/logo_konco_space_white.png',
-                  width: 220, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
+              child: Image.asset(
+                'assets/images/logo_konco_space_white.png',
+                height: 96,
+                fit: BoxFit.contain,
+              ),
             ),
-            const SizedBox(height: 24),
-            const Text('Pengalaman Kopi Berkelas',
-                style: TextStyle(
-                    color: kBrandAccent,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 4)),
+            const SizedBox(height: 16),
+            const Text(
+              'Pengalaman Kopi Berkelas',
+              style: TextStyle(
+                color: kBrandAccent,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 4,
+              ),
+            ),
           ],
         ),
       ),
@@ -253,8 +558,12 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordCtrl.text,
       );
       if (mounted) {
-        Navigator.pushReplacement(context,
-            MaterialPageRoute(builder: (_) => MainNavigation(key: AppState.navKey)));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MainNavigation(key: AppState.navKey),
+          ),
+        );
       }
     } on ApiException catch (e) {
       setState(() {
@@ -272,90 +581,135 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(children: [
-        Positioned(top: -100, right: -100, child: _blob(kBrandAccent.withValues(alpha: 0.05))),
-        Positioned(bottom: -100, left: -100, child: _blob(kBrandDark.withValues(alpha: 0.05))),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 40),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Image.asset('assets/images/logo_konco_space.png',
-                height: 96, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
-            const SizedBox(height: 48),
-            TextField(
-              controller: _emailCtrl,
-              keyboardType: TextInputType.emailAddress,
-              decoration: _inputDecoration('EMAIL'),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passwordCtrl,
-              obscureText: true,
-              decoration: _inputDecoration('KATA SANDI'),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-            ],
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: _loading ? null : _login,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: kBrandDark,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 60),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-              child: _loading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('MASUK KE FLOW',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold, letterSpacing: 2, fontSize: 12)),
-            ),
-            const SizedBox(height: 16),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const Text('Belum punya akun?',
-                  style: TextStyle(color: Colors.grey, fontSize: 12)),
-              TextButton(
-                onPressed: () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const RegisterScreen())),
-                child: const Text('DAFTAR',
-                    style: TextStyle(
-                        color: kBrandDark,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1)),
-              ),
-            ]),
-            const SizedBox(height: 8),
-            const Text('DIRACIK SEJAK 2024',
-                style: TextStyle(
+      body: Stack(
+        children: [
+          Positioned(
+            top: -100,
+            right: -100,
+            child: _blob(kBrandAccent.withValues(alpha: 0.05)),
+          ),
+          Positioned(
+            bottom: -100,
+            left: -100,
+            child: _blob(kBrandDark.withValues(alpha: 0.05)),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Image.asset(
+                  'assets/images/logo_konco_space.png',
+                  height: 88,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(height: 48),
+                TextField(
+                  controller: _emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: _inputDecoration('EMAIL'),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _passwordCtrl,
+                  obscureText: true,
+                  decoration: _inputDecoration('KATA SANDI'),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(color: Colors.red, fontSize: 12),
+                  ),
+                ],
+                const SizedBox(height: 32),
+                ElevatedButton(
+                  onPressed: _loading ? null : _login,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kBrandDark,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 60),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: _loading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'MASUK KE FLOW',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 2,
+                            fontSize: 12,
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'Belum punya akun?',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const RegisterScreen(),
+                        ),
+                      ),
+                      child: const Text(
+                        'DAFTAR',
+                        style: TextStyle(
+                          color: kBrandDark,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'DIRACIK SEJAK 2024',
+                  style: TextStyle(
                     color: Colors.grey,
                     fontSize: 9,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 1.5)),
-          ]),
-        ),
-      ]),
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _blob(Color color) => Container(
-      width: 300,
-      height: 300,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle));
+    width: 300,
+    height: 300,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
 
   InputDecoration _inputDecoration(String label) => InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            color: Colors.grey,
-            letterSpacing: 1.5),
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-      );
+    labelText: label,
+    labelStyle: const TextStyle(
+      fontSize: 10,
+      fontWeight: FontWeight.bold,
+      color: Colors.grey,
+      letterSpacing: 1.5,
+    ),
+    filled: true,
+    fillColor: Colors.white,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: BorderSide.none,
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────────────────
@@ -423,7 +777,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         // Registration logs the user in immediately (token persisted).
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => MainNavigation(key: AppState.navKey)),
+          MaterialPageRoute(
+            builder: (_) => MainNavigation(key: AppState.navKey),
+          ),
           (r) => false,
         );
       }
@@ -443,169 +799,257 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(children: [
-        Positioned(
+      body: Stack(
+        children: [
+          Positioned(
             top: -80,
             right: -80,
             child: Container(
-                width: 250,
-                height: 250,
-                decoration: BoxDecoration(
-                    color: kBrandAccent.withValues(alpha: 0.05), shape: BoxShape.circle))),
-        Positioned(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                color: kBrandAccent.withValues(alpha: 0.05),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Positioned(
             bottom: -80,
             left: -80,
             child: Container(
-                width: 250,
-                height: 250,
-                decoration: BoxDecoration(
-                    color: kBrandDark.withValues(alpha: 0.05), shape: BoxShape.circle))),
-        SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const SizedBox(height: 16),
-              IconButton(
-                  icon: const Icon(LucideIcons.chevronLeft, color: kBrandDark),
-                  onPressed: () => Navigator.pop(context),
-                  padding: EdgeInsets.zero),
-              const SizedBox(height: 24),
-              Center(
-                child: Column(children: [
-                  Image.asset('assets/images/logo_konco_space.png',
-                      height: 64, fit: BoxFit.contain, semanticLabel: 'Konco Space'),
-                  const SizedBox(height: 20),
-                  Text('Buat Akun Baru',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.plusJakartaSans(
-                          color: kBrandDark,
-                          fontSize: 30,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: -1.5)),
-                  const Text('Bergabung dan nikmati kopi terbaik',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey, fontSize: 13)),
-                ]),
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                color: kBrandDark.withValues(alpha: 0.05),
+                shape: BoxShape.circle,
               ),
-              const SizedBox(height: 36),
-              _label('NAMA LENGKAP'),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: _nameCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration:
-                      _inputDecoration('Contoh: Aris Setiawan', icon: LucideIcons.user)),
-              const SizedBox(height: 20),
-              _label('EMAIL'),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: _emailCtrl,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration:
-                      _inputDecoration('Contoh: aris@email.com', icon: LucideIcons.mail)),
-              const SizedBox(height: 20),
-              _label('NOMOR HP (OPSIONAL)'),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: _phoneCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration:
-                      _inputDecoration('Contoh: 08123456789', icon: LucideIcons.phone)),
-              const SizedBox(height: 20),
-              _label('KATA SANDI'),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: _passwordCtrl,
-                  obscureText: _obscure1,
-                  decoration: _inputDecoration('Minimal 8 karakter',
+            ),
+          ),
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 16),
+                  IconButton(
+                    icon: const Icon(
+                      LucideIcons.chevronLeft,
+                      color: kBrandDark,
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    padding: EdgeInsets.zero,
+                  ),
+                  const SizedBox(height: 24),
+                  Center(
+                    child: Column(
+                      children: [
+                        Image.asset(
+                          'assets/images/logo_konco_space.png',
+                          height: 72,
+                          fit: BoxFit.contain,
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Buat Akun Baru',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.plusJakartaSans(
+                            color: kBrandDark,
+                            fontSize: 30,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: -1.5,
+                          ),
+                        ),
+                        const Text(
+                          'Bergabung dan nikmati kopi terbaik',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 36),
+                  _label('NAMA LENGKAP'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _nameCtrl,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: _inputDecoration(
+                      'Contoh: Aris Setiawan',
+                      icon: LucideIcons.user,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _label('EMAIL'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: _inputDecoration(
+                      'Contoh: aris@email.com',
+                      icon: LucideIcons.mail,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _label('NOMOR HP (OPSIONAL)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _phoneCtrl,
+                    keyboardType: TextInputType.phone,
+                    decoration: _inputDecoration(
+                      'Contoh: 08123456789',
+                      icon: LucideIcons.phone,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _label('KATA SANDI'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _passwordCtrl,
+                    obscureText: _obscure1,
+                    decoration: _inputDecoration(
+                      'Minimal 8 karakter',
                       icon: LucideIcons.lock,
                       suffix: IconButton(
-                          icon: Icon(_obscure1 ? LucideIcons.eyeOff : LucideIcons.eye,
-                              size: 18, color: Colors.grey),
-                          onPressed: () => setState(() => _obscure1 = !_obscure1)))),
-              const SizedBox(height: 20),
-              _label('KONFIRMASI KATA SANDI'),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: _confirmCtrl,
-                  obscureText: _obscure2,
-                  decoration: _inputDecoration('Ulangi kata sandi',
+                        icon: Icon(
+                          _obscure1 ? LucideIcons.eyeOff : LucideIcons.eye,
+                          size: 18,
+                          color: Colors.grey,
+                        ),
+                        onPressed: () => setState(() => _obscure1 = !_obscure1),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _label('KONFIRMASI KATA SANDI'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _confirmCtrl,
+                    obscureText: _obscure2,
+                    decoration: _inputDecoration(
+                      'Ulangi kata sandi',
                       icon: LucideIcons.lock,
                       suffix: IconButton(
-                          icon: Icon(_obscure2 ? LucideIcons.eyeOff : LucideIcons.eye,
-                              size: 18, color: Colors.grey),
-                          onPressed: () => setState(() => _obscure2 = !_obscure2)))),
-              if (_error != null) ...[
-                const SizedBox(height: 16),
-                Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
+                        icon: Icon(
+                          _obscure2 ? LucideIcons.eyeOff : LucideIcons.eye,
+                          size: 18,
+                          color: Colors.grey,
+                        ),
+                        onPressed: () => setState(() => _obscure2 = !_obscure2),
+                      ),
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
                         color: Colors.red.shade50,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.red.shade100)),
-                    child: Row(children: [
-                      Icon(LucideIcons.alertCircle, color: Colors.red.shade400, size: 16),
-                      const SizedBox(width: 8),
-                      Expanded(
-                          child: Text(_error!,
-                              style: TextStyle(color: Colors.red.shade600, fontSize: 12))),
-                    ])),
-              ],
-              const SizedBox(height: 32),
-              ElevatedButton(
-                onPressed: _loading ? null : _register,
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: kBrandDark,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 60),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-                child: _loading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text('BUAT AKUN',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, letterSpacing: 2, fontSize: 12)),
-              ),
-              const SizedBox(height: 16),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Text('Sudah punya akun?',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('MASUK',
-                        style: TextStyle(
+                        border: Border.all(color: Colors.red.shade100),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            LucideIcons.alertCircle,
+                            color: Colors.red.shade400,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: TextStyle(
+                                color: Colors.red.shade600,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 32),
+                  ElevatedButton(
+                    onPressed: _loading ? null : _register,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kBrandDark,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 60),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: _loading
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : const Text(
+                            'BUAT AKUN',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 2,
+                              fontSize: 12,
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'Sudah punya akun?',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text(
+                          'MASUK',
+                          style: TextStyle(
                             color: kBrandDark,
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            letterSpacing: 1))),
-              ]),
-              const SizedBox(height: 24),
-            ]),
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
-  Widget _label(String text) => Text(text,
-      style: const TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-          color: Colors.grey,
-          letterSpacing: 1.5));
+  Widget _label(String text) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 10,
+      fontWeight: FontWeight.bold,
+      color: Colors.grey,
+      letterSpacing: 1.5,
+    ),
+  );
 
-  InputDecoration _inputDecoration(String hint,
-          {required IconData icon, Widget? suffix}) =>
-      InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-        prefixIcon: Icon(icon, size: 18, color: Colors.grey),
-        suffixIcon: suffix,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-      );
+  InputDecoration _inputDecoration(
+    String hint, {
+    required IconData icon,
+    Widget? suffix,
+  }) => InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+    prefixIcon: Icon(icon, size: 18, color: Colors.grey),
+    suffixIcon: suffix,
+    filled: true,
+    fillColor: Colors.white,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: BorderSide.none,
+    ),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+  );
 }
 
 // ─────────────────────────────────────────────────────────
@@ -614,10 +1058,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
 class MainNavigation extends StatefulWidget {
   const MainNavigation({super.key});
   @override
-  State<MainNavigation> createState() => _MainNavigationState();
+  State<MainNavigation> createState() => MainNavigationState();
 }
 
-class _MainNavigationState extends State<MainNavigation> {
+class MainNavigationState extends State<MainNavigation> {
   int _currentIndex = 0;
   void updateIndex(int i) => setState(() => _currentIndex = i);
   void refresh() => setState(() {});
@@ -636,8 +1080,9 @@ class _MainNavigationState extends State<MainNavigation> {
       bottomNavigationBar: Container(
         height: 90,
         decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xFFF1F1F1)))),
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFF1F1F1))),
+        ),
         child: BottomNavigationBar(
           currentIndex: _currentIndex,
           onTap: updateIndex,
@@ -647,16 +1092,32 @@ class _MainNavigationState extends State<MainNavigation> {
           unselectedItemColor: Colors.grey.shade400,
           selectedFontSize: 9,
           unselectedFontSize: 9,
-          selectedLabelStyle:
-              const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
-          unselectedLabelStyle:
-              const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
+          selectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
           type: BottomNavigationBarType.fixed,
           items: const [
-            BottomNavigationBarItem(icon: Icon(LucideIcons.home), label: 'HOME'),
-            BottomNavigationBarItem(icon: Icon(LucideIcons.shoppingBag), label: 'PESANAN'),
-            BottomNavigationBarItem(icon: Icon(LucideIcons.coffee), label: 'KERANJANG'),
-            BottomNavigationBarItem(icon: Icon(LucideIcons.user), label: 'PROFIL'),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.home),
+              label: 'HOME',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.shoppingBag),
+              label: 'PESANAN',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.coffee),
+              label: 'KERANJANG',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(LucideIcons.user),
+              label: 'PROFIL',
+            ),
           ],
         ),
       ),
@@ -859,175 +1320,256 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(children: [
-      StickyHeader(
+    return Column(
+      children: [
+        StickyHeader(
           title: 'Konco Space',
           logoAsset: 'assets/images/logo_konco_space.png',
           subtitle: 'Kopi Terbaik Untukmu',
           icon: LucideIcons.bell,
           badgeCount: _unread,
-          onIconTap: _openNotifications),
-      Expanded(
+          onIconTap: _openNotifications,
+        ),
+        Expanded(
           child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: TextField(
-              decoration: InputDecoration(
-                  prefixIcon:
-                      const Icon(LucideIcons.search, size: 20, color: Colors.grey),
-                  hintText: 'Cari kopi favoritmu...',
-                  hintStyle: const TextStyle(fontSize: 14, color: Colors.grey),
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(100),
-                      borderSide: BorderSide.none)),
-            ),
-          ),
-          const SizedBox(height: 28),
-          SizedBox(
-            height: 44,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.only(left: 24),
-              itemCount: _categories.length,
-              itemBuilder: (ctx, i) {
-                final cat = _categories[i];
-                final isActive = _activeCategory == cat;
-                return GestureDetector(
-                  onTap: () {
-                    setState(() => _activeCategory = cat);
-                    _loadProducts();
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 12),
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    decoration: BoxDecoration(
-                        color: isActive ? kBrandDark : Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: TextField(
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(
+                        LucideIcons.search,
+                        size: 20,
+                        color: Colors.grey,
+                      ),
+                      hintText: 'Cari kopi favoritmu...',
+                      hintStyle: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                      ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(100),
-                        border: Border.all(
-                            color: isActive ? kBrandDark : const Color(0xFFF1F1F1)),
-                        boxShadow: isActive
-                            ? [
-                                BoxShadow(
-                                    color: kBrandDark.withValues(alpha: 0.2),
-                                    blurRadius: 15,
-                                    offset: const Offset(0, 5))
-                              ]
-                            : null),
-                    alignment: Alignment.center,
-                    child: Text(cat,
-                        style: TextStyle(
-                            color: isActive ? Colors.white : Colors.grey,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold)),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
                   ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 32),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              const Text('Pilihan Populer',
-                  style: TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.bold, color: kBrandDark)),
-              TextButton(
-                  onPressed: () {},
-                  child: const Text('Lihat Semua',
-                      style: TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey))),
-            ]),
-          ),
-          const SizedBox(height: 16),
-          if (_loading)
-            const Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(child: CircularProgressIndicator(color: kBrandDark)))
-          else if (_error != null)
-            Padding(
-                padding: const EdgeInsets.all(40),
-                child: Center(
-                    child: Column(children: [
-                  Text(_error!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey)),
-                  const SizedBox(height: 12),
-                  TextButton(
-                      onPressed: _loadProducts,
-                      child: const Text('Coba lagi',
-                          style: TextStyle(
-                              color: kBrandDark, fontWeight: FontWeight.bold))),
-                ])))
-          else if (_products.isEmpty)
-            const Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(
-                    child: Text('Belum ada menu di kategori ini',
-                        style: TextStyle(color: Colors.grey))))
-          else
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 20,
-                  crossAxisSpacing: 20,
-                  childAspectRatio: 0.8),
-              itemCount: _products.length,
-              itemBuilder: (ctx, i) => ProductCard(product: _products[i]),
-            ),
-          const SizedBox(height: 32),
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.all(28),
-            width: double.infinity,
-            decoration: BoxDecoration(
-                color: kBrandDark, borderRadius: BorderRadius.circular(32)),
-            child: Stack(children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('FLOW REWARDS',
-                    style: TextStyle(
-                        color: kBrandAccent,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 9,
-                        letterSpacing: 2)),
-                const SizedBox(height: 8),
-                const Text('Klaim kopi gratis kamu',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: -1)),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _openLoyalty,
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: kBrandAccent,
-                      foregroundColor: kBrandDark,
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      shape:
-                          RoundedRectangleBorder(borderRadius: BorderRadius.circular(100))),
-                  child: const Text('CEK POIN',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
-              ]),
-              const Positioned(
-                  right: -30,
-                  bottom: -30,
-                  child: Opacity(
-                      opacity: 0.1,
-                      child: Icon(LucideIcons.coffee, size: 140, color: kBrandAccent))),
-            ]),
+                const SizedBox(height: 28),
+                SizedBox(
+                  height: 44,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(left: 24),
+                    itemCount: _categories.length,
+                    itemBuilder: (ctx, i) {
+                      final cat = _categories[i];
+                      final isActive = _activeCategory == cat;
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() => _activeCategory = cat);
+                          _loadProducts();
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.only(right: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          decoration: BoxDecoration(
+                            color: isActive ? kBrandDark : Colors.white,
+                            borderRadius: BorderRadius.circular(100),
+                            border: Border.all(
+                              color: isActive
+                                  ? kBrandDark
+                                  : const Color(0xFFF1F1F1),
+                            ),
+                            boxShadow: isActive
+                                ? [
+                                    BoxShadow(
+                                      color: kBrandDark.withValues(alpha: 0.2),
+                                      blurRadius: 15,
+                                      offset: const Offset(0, 5),
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            cat,
+                            style: TextStyle(
+                              color: isActive ? Colors.white : Colors.grey,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Pilihan Populer',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: kBrandDark,
+                        ),
+                      ),
+                      TextButton(
+                          onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const AllProductsScreen())),
+                          child: const Text('Lihat Semua',
+                              style: TextStyle(
+                                  fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey))),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(
+                      child: CircularProgressIndicator(color: kBrandDark),
+                    ),
+                  )
+                else if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(40),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: _loadProducts,
+                            child: const Text(
+                              'Coba lagi',
+                              style: TextStyle(
+                                color: kBrandDark,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else if (_products.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(
+                      child: Text(
+                        'Belum ada menu di kategori ini',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  )
+                else
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 20,
+                          crossAxisSpacing: 20,
+                          childAspectRatio: 0.8,
+                        ),
+                    itemCount: _products.length,
+                    itemBuilder: (ctx, i) => ProductCard(product: _products[i]),
+                  ),
+                const SizedBox(height: 32),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 24),
+                  padding: const EdgeInsets.all(28),
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: kBrandDark,
+                    borderRadius: BorderRadius.circular(32),
+                  ),
+                  child: Stack(
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'FLOW REWARDS',
+                            style: TextStyle(
+                              color: kBrandAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 9,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Klaim kopi gratis kamu',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: -1,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton(
+                            onPressed: _openLoyalty,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kBrandAccent,
+                              foregroundColor: kBrandDark,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(100),
+                              ),
+                            ),
+                            child: const Text(
+                              'CEK POIN',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Positioned(
+                        right: -30,
+                        bottom: -30,
+                        child: Opacity(
+                          opacity: 0.1,
+                          child: Icon(
+                            LucideIcons.coffee,
+                            size: 140,
+                            color: kBrandAccent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 32),
+              ],
+            ),
           ),
-          const SizedBox(height: 32),
-        ]),
-      )),
-    ]);
+        ),
+      ],
+    );
   }
 }
 
@@ -1038,46 +1580,77 @@ class ProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => Navigator.push(context,
-          MaterialPageRoute(builder: (_) => DetailScreen(product: product))),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => DetailScreen(product: product)),
+      ),
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFFF8F8F8))),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: const Color(0xFFF8F8F8)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
               child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: _menuImage(product.image))),
-          const SizedBox(height: 12),
-          Text(product.name,
+                borderRadius: BorderRadius.circular(20),
+                child: _menuImage(product.image),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              product.name,
               style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 13, color: kBrandDark)),
-          Text(product.category.toUpperCase(),
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                color: kBrandDark,
+              ),
+            ),
+            Text(
+              product.category.toUpperCase(),
               style: const TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 9,
-                  letterSpacing: 1)),
-          if (product.points > 0) ...[
-            const SizedBox(height: 6),
-            _PointsBadge(points: product.points),
+                color: Colors.grey,
+                fontWeight: FontWeight.bold,
+                fontSize: 9,
+                letterSpacing: 1,
+              ),
+            ),
+            if (product.points > 0) ...[
+              const SizedBox(height: 6),
+              _PointsBadge(points: product.points),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Rp${product.price ~/ 1000}K',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: kBrandDark,
+                  ),
+                ),
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: kBrandDark,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    LucideIcons.plus,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ),
+              ],
+            ),
           ],
-          const SizedBox(height: 12),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text('Rp${product.price ~/ 1000}K',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 14, color: kBrandDark)),
-            Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                    color: kBrandDark, borderRadius: BorderRadius.circular(10)),
-                child: const Icon(LucideIcons.plus, color: Colors.white, size: 16)),
-          ]),
-        ]),
+        ),
       ),
     );
   }
@@ -1127,7 +1700,7 @@ Widget _menuImage(String url, {double? width, double? height}) {
   );
 }
 
-// DetailScreen — addToCart unchanged (milk/sweetness → order note)
+// DetailScreen — mendukung condiment dinamis dari backend dan fallback catatan teks
 class DetailScreen extends StatefulWidget {
   final Product product;
   const DetailScreen({super.key, required this.product});
@@ -1136,149 +1709,356 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> {
-  String _milkType = 'Oat';
-  String _sweetness = 'Normal';
+  final TextEditingController _notesController = TextEditingController();
   int _quantity = 1;
+  final Map<int, Set<int>> _selectedOptionsByGroup = {};
+
+  @override
+  void initState() {
+    super.initState();
+    for (final group in widget.product.condimentGroups) {
+      _selectedOptionsByGroup[group.id] = {};
+      if (group.isRequired && group.options.isNotEmpty) {
+        _selectedOptionsByGroup[group.id]!.add(group.options.first.id);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  List<CondimentOption> get _selectedCondiments {
+    final list = <CondimentOption>[];
+    for (final group in widget.product.condimentGroups) {
+      final selectedIds = _selectedOptionsByGroup[group.id] ?? {};
+      for (final opt in group.options) {
+        if (selectedIds.contains(opt.id)) {
+          list.add(opt);
+        }
+      }
+    }
+    return list;
+  }
+
+  int get _unitPrice {
+    final condimentSum = _selectedCondiments.fold<double>(
+      0.0,
+      (sum, c) => sum + c.additionalPrice,
+    );
+    return widget.product.price + condimentSum.round();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Column(children: [
-        Expanded(
+      body: Column(
+        children: [
+          Expanded(
             child: SingleChildScrollView(
-                child: Column(children: [
-          Stack(children: [
-            _menuImage(widget.product.image, height: 400),
-            Positioned(
-                top: 50,
-                left: 24,
-                child: CircleAvatar(
-                    backgroundColor: Colors.white.withValues(alpha: 0.3),
-                    child: IconButton(
-                        icon: const Icon(LucideIcons.chevronLeft, color: Colors.white),
-                        onPressed: () => Navigator.pop(context)))),
-            Positioned(
-                bottom: 30,
-                left: 24,
-                right: 24,
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(widget.product.name,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: -1)),
-                  const SizedBox(height: 8),
-                  Text(widget.product.description,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8), fontSize: 14)),
-                ])),
-          ]),
-          Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (widget.product.points > 0) ...[
-                  _PointsBadge(
-                      points: widget.product.points * _quantity,
-                      label: 'poin member${_quantity > 1 ? ' ($_quantity item)' : ''}'),
-                  const SizedBox(height: 20),
+              child: Column(
+                children: [
+                  Stack(
+                    children: [
+                      _menuImage(widget.product.image, height: 400),
+                      Positioned(
+                        top: 50,
+                        left: 24,
+                        child: CircleAvatar(
+                          backgroundColor: Colors.white.withValues(alpha: 0.3),
+                          child: IconButton(
+                            icon: const Icon(
+                              LucideIcons.chevronLeft,
+                              color: Colors.white,
+                            ),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 30,
+                        left: 24,
+                        right: 24,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.product.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: -1,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              widget.product.description,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.8),
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (widget.product.points > 0) ...[
+                          _PointsBadge(
+                            points: widget.product.points * _quantity,
+                            label:
+                                'poin member${_quantity > 1 ? ' ($_quantity item)' : ''}',
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                        if (widget.product.condimentGroups.isNotEmpty) ...[
+                          ...widget.product.condimentGroups.map((group) {
+                            final selected =
+                                _selectedOptionsByGroup[group.id] ?? {};
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 24),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        group.name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        group.isRequired
+                                            ? '(Wajib)'
+                                            : '(Opsional)',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: group.isRequired
+                                              ? Colors.red
+                                              : Colors.grey,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: group.options.map((opt) {
+                                      final isChosen = selected.contains(
+                                        opt.id,
+                                      );
+                                      return GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            if (group.isMulti) {
+                                              if (isChosen) {
+                                                selected.remove(opt.id);
+                                              } else {
+                                                selected.add(opt.id);
+                                              }
+                                            } else {
+                                              selected.clear();
+                                              selected.add(opt.id);
+                                            }
+                                          });
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 10,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isChosen
+                                                ? kBrandDark
+                                                : Colors.white,
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border: Border.all(
+                                              color: isChosen
+                                                  ? kBrandDark
+                                                  : const Color(0xFFE5E7EB),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                opt.name,
+                                                style: TextStyle(
+                                                  color: isChosen
+                                                      ? Colors.white
+                                                      : Colors.black87,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                              if (opt.additionalPrice > 0) ...[
+                                                const SizedBox(width: 6),
+                                                Text(
+                                                  '+Rp${opt.additionalPrice.round() ~/ 1000}K',
+                                                  style: TextStyle(
+                                                    color: isChosen
+                                                        ? Colors.white70
+                                                        : kBrandBrown,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                        const Text(
+                          'Catatan Pesanan',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Tambahkan instruksi khusus untuk dapur/barista (opsional)',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _notesController,
+                          maxLines: 2,
+                          decoration: InputDecoration(
+                            hintText:
+                                'Contoh: Jangan terlalu panas, potong jadi 2, dll.',
+                            hintStyle: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey,
+                            ),
+                            fillColor: Colors.white,
+                            filled: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(
+                                color: Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(
+                                color: Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(
+                                color: kBrandDark,
+                                width: 1.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-                const Text('Jenis Susu', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Row(
-                    children: ['Normal', 'Oat', 'Almond']
-                        .map((m) => Expanded(
-                            child: GestureDetector(
-                                onTap: () => setState(() => _milkType = m),
-                                child: Container(
-                                    margin: const EdgeInsets.only(right: 8),
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                        color: _milkType == m ? kBrandDark : Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border:
-                                            Border.all(color: const Color(0xFFF1F1F1))),
-                                    alignment: Alignment.center,
-                                    child: Text(m,
-                                        style: TextStyle(
-                                            color: _milkType == m
-                                                ? Colors.white
-                                                : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12))))))
-                        .toList()),
-                const SizedBox(height: 32),
-                const Text('Kemanisan', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Row(
-                    children: ['Less', 'Normal', 'Extra']
-                        .map((l) => Expanded(
-                            child: GestureDetector(
-                                onTap: () => setState(() => _sweetness = l),
-                                child: Container(
-                                    margin: const EdgeInsets.only(right: 8),
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                        color:
-                                            _sweetness == l ? kBrandDark : Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border:
-                                            Border.all(color: const Color(0xFFF1F1F1))),
-                                    alignment: Alignment.center,
-                                    child: Text(l,
-                                        style: TextStyle(
-                                            color: _sweetness == l
-                                                ? Colors.white
-                                                : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12))))))
-                        .toList()),
-              ])),
-        ]))),
-        Container(
+              ),
+            ),
+          ),
+          Container(
             padding: const EdgeInsets.all(24),
             decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: Color(0xFFF1F1F1)))),
-            child: Row(children: [
-              Container(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Color(0xFFF1F1F1))),
+            ),
+            child: Row(
+              children: [
+                Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
-                      color: kBrandMuted, borderRadius: BorderRadius.circular(16)),
-                  child: Row(children: [
-                    IconButton(
+                    color: kBrandMuted,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
                         icon: const Icon(LucideIcons.minus, size: 18),
-                        onPressed: () =>
-                            setState(() => _quantity = (_quantity - 1).clamp(1, 99))),
-                    Text('$_quantity',
-                        style:
-                            const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    IconButton(
+                        onPressed: () => setState(
+                          () => _quantity = (_quantity - 1).clamp(1, 99),
+                        ),
+                      ),
+                      Text(
+                        '$_quantity',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                      IconButton(
                         icon: const Icon(LucideIcons.plus, size: 18),
-                        onPressed: () => setState(() => _quantity++)),
-                  ])),
-              const SizedBox(width: 16),
-              Expanded(
+                        onPressed: () => setState(() => _quantity++),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
                   child: ElevatedButton(
-                      onPressed: () {
-                        AppState.addToCart(CartItem(
+                    onPressed: () {
+                      AppState.addToCart(
+                        CartItem(
                           product: widget.product,
-                          milkType: _milkType,
-                          sweetness: _sweetness,
+                          notes: _notesController.text.trim(),
+                          selectedCondiments: _selectedCondiments,
                           quantity: _quantity,
-                        ));
-                        Navigator.pop(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: kBrandDark,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20))),
-                      child: Text(
-                          'TAMBAH • Rp${(widget.product.price * _quantity) ~/ 1000}K',
-                          style: const TextStyle(fontWeight: FontWeight.bold)))),
-            ])),
-      ]),
+                        ),
+                        context,
+                      );
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kBrandDark,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      'TAMBAH • Rp${(_unitPrice * _quantity) ~/ 1000}K',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1380,8 +2160,11 @@ class _CartScreenState extends State<CartScreen> {
         AppState.startPolling(context);
       } else {
         // QRIS / VA: show payment instructions, then poll.
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => PaymentScreen(order: order)));
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => PaymentScreen(order: order)),
+        );
+        // Polling dimulai setelah pembayaran dikonfirmasi di PaymentScreen._onPaid()
       }
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -1394,27 +2177,45 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    int subtotal = AppState.cart.fold(0, (s, i) => s + i.product.price * i.quantity);
+    int subtotal = AppState.cart.fold(0, (s, i) => s + i.totalPrice);
     final cartPoints =
         AppState.cart.fold<int>(0, (s, i) => s + i.product.points * i.quantity);
     final voucher = AppState.selectedVoucher;
 
-    return Column(children: [
-      StickyHeader(
+    return Column(
+      children: [
+        StickyHeader(
           title: 'keranjangku.',
           subtitle: '${AppState.cart.length} Produk',
-          icon: LucideIcons.shoppingBag),
-      Expanded(
+          icon: LucideIcons.shoppingBag,
+        ),
+        Expanded(
           child: AppState.cart.isEmpty
               ? Center(
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(LucideIcons.shoppingBag, size: 64, color: Colors.grey.shade200),
-                  const SizedBox(height: 16),
-                  const Text('Keranjangmu kosong',
-                      style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-                ]))
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        LucideIcons.shoppingBag,
+                        size: 64,
+                        color: Colors.grey.shade200,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Keranjangmu kosong',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
               : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
                   itemCount: AppState.cart.length,
                   itemBuilder: (ctx, i) {
                     final item = AppState.cart[i];
@@ -1422,102 +2223,165 @@ class _CartScreenState extends State<CartScreen> {
                       margin: const EdgeInsets.only(bottom: 16),
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(28),
-                          border: Border.all(color: const Color(0xFFF1F1F1))),
-                      child: Row(children: [
-                        ClipRRect(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: const Color(0xFFF1F1F1)),
+                      ),
+                      child: Row(
+                        children: [
+                          ClipRRect(
                             borderRadius: BorderRadius.circular(16),
-                            child: _menuImage(item.product.image,
-                                width: 70, height: 70)),
-                        const SizedBox(width: 16),
-                        Expanded(
+                            child: _menuImage(
+                              item.product.image,
+                              width: 70,
+                              height: 70,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
                             child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                              Text(item.product.name,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.product.name,
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.bold, color: kBrandDark)),
-                              Text('${item.milkType} | ${item.sweetness}',
-                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: kBrandDark,
+                                  ),
+                                ),
+                                if (item.note.isNotEmpty)
+                                  Text(
+                                    item.note,
+                                    style: const TextStyle(
                                       color: Colors.grey,
                                       fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 8),
-                              Text('Rp${(item.product.price * item.quantity) ~/ 1000}K',
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Rp${item.totalPrice ~/ 1000}K',
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.bold, fontSize: 13)),
-                            ])),
-                        Column(children: [
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            children: [
+                              IconButton(
+                                icon: const Icon(LucideIcons.plus, size: 16),
+                                onPressed: () =>
+                                    _cartChanged(() => item.quantity++),
+                              ),
+                              Text(
+                                '${item.quantity}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(LucideIcons.minus, size: 16),
+                                onPressed: () => _cartChanged(
+                                  () => item.quantity = (item.quantity - 1)
+                                      .clamp(1, 99),
+                                ),
+                              ),
+                            ],
+                          ),
                           IconButton(
-                              icon: const Icon(LucideIcons.plus, size: 16),
-                              onPressed: () => _cartChanged(() => item.quantity++)),
-                          Text('${item.quantity}',
-                              style: const TextStyle(fontWeight: FontWeight.bold)),
-                          IconButton(
-                              icon: const Icon(LucideIcons.minus, size: 16),
-                              onPressed: () => _cartChanged(() =>
-                                  item.quantity = (item.quantity - 1).clamp(1, 99))),
-                        ]),
-                        IconButton(
-                            icon: const Icon(LucideIcons.trash2,
-                                color: Colors.red, size: 18),
+                            icon: const Icon(
+                              LucideIcons.trash2,
+                              color: Colors.red,
+                              size: 18,
+                            ),
                             onPressed: () =>
-                                _cartChanged(() => AppState.cart.removeAt(i))),
-                      ]),
+                                _cartChanged(() => AppState.cart.removeAt(i)),
+                          ),
+                        ],
+                      ),
                     );
                   },
-                )),
-      if (AppState.cart.isNotEmpty)
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: const BoxDecoration(
-              color: kBrandMuted,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(32))),
-          child: Column(children: [
-            _voucherTile(),
-            const SizedBox(height: 16),
-            _summaryRow('SUBTOTAL', _rupiah(_quote?.subtotal ?? subtotal)),
-            if (voucher != null && _quote != null) ...[
-              const SizedBox(height: 8),
-              _summaryRow('DISKON VOUCHER', '-${_rupiah(_quote!.voucherDiscount)}',
-                  valueColor: Colors.green.shade700),
-              const SizedBox(height: 8),
-              _summaryRow('TOTAL', _rupiah(_quote!.total)),
-            ],
-            if (cartPoints > 0) ...[
-              const SizedBox(height: 8),
-              _summaryRow('POIN DIDAPAT', '+$cartPoints poin'),
-            ],
-            const SizedBox(height: 4),
-            const Text('Pajak & total final dihitung oleh server',
-                style: TextStyle(fontSize: 9, color: Colors.grey)),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _placing ? null : _checkout,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: kBrandDark,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 60),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
-              child: _placing
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('PILIH PEMBAYARAN',
-                      style:
-                          TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
-            ),
-          ]),
+                ),
         ),
-    ]);
+        if (AppState.cart.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: const BoxDecoration(
+              color: kBrandMuted,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+            ),
+            child: Column(
+              children: [
+                _voucherTile(),
+                const SizedBox(height: 16),
+                _summaryRow('SUBTOTAL', _rupiah(_quote?.subtotal ?? subtotal)),
+                if (voucher != null && _quote != null) ...[
+                  const SizedBox(height: 8),
+                  _summaryRow(
+                    'DISKON VOUCHER',
+                    '-${_rupiah(_quote!.voucherDiscount)}',
+                    valueColor: Colors.green.shade700,
+                  ),
+                  const SizedBox(height: 8),
+                  _summaryRow('TOTAL', _rupiah(_quote!.total)),
+                ],
+                if (cartPoints > 0) ...[
+                  const SizedBox(height: 8),
+                  _summaryRow('POIN DIDAPAT', '+$cartPoints poin'),
+                ],
+                const SizedBox(height: 4),
+                const Text(
+                  'Pajak & total final dihitung oleh server',
+                  style: TextStyle(fontSize: 9, color: Colors.grey),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: _placing ? null : _checkout,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kBrandDark,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 60),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  child: _placing
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'PILIH PEMBAYARAN',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 
-  Widget _summaryRow(String label, String value, {Color? valueColor}) =>
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
-        Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: valueColor)),
-      ]);
+  Widget _summaryRow(String label, String value, {Color? valueColor}) => Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        label,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          color: Colors.grey,
+        ),
+      ),
+      Text(
+        value,
+        style: TextStyle(fontWeight: FontWeight.bold, color: valueColor),
+      ),
+    ],
+  );
 
   Widget _voucherTile() {
     final v = AppState.selectedVoucher;
@@ -1599,36 +2463,48 @@ class _PaymentMethodSheetState extends State<PaymentMethodSheet> {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(32))),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2))),
-        const SizedBox(height: 20),
-        const Align(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Align(
             alignment: Alignment.centerLeft,
-            child: Text('Metode Pembayaran',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
-        const SizedBox(height: 20),
-        _option('cash', 'Tunai (Cash)', LucideIcons.banknote),
-        _option('qris', 'QRIS', LucideIcons.qrCode),
-        _option('virtual_account', 'Virtual Account', LucideIcons.creditCard),
-        if (_method == 'virtual_account') ...[
-          const SizedBox(height: 12),
-          Align(
+            child: Text(
+              'Metode Pembayaran',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 20),
+          _option('cash', 'Tunai (Cash)', LucideIcons.banknote),
+          _option('qris', 'QRIS', LucideIcons.qrCode),
+          _option('virtual_account', 'Virtual Account', LucideIcons.creditCard),
+          if (_method == 'virtual_account') ...[
+            const SizedBox(height: 12),
+            Align(
               alignment: Alignment.centerLeft,
-              child: Text('PILIH BANK',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade600,
-                      letterSpacing: 1))),
-          const SizedBox(height: 8),
-          Wrap(
+              child: Text(
+                'PILIH BANK',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade600,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
               spacing: 8,
               children: ['bca', 'bni', 'bri', 'mandiri'].map((b) {
                 final active = _channel == b;
@@ -1638,29 +2514,40 @@ class _PaymentMethodSheetState extends State<PaymentMethodSheet> {
                   onSelected: (_) => setState(() => _channel = b),
                   selectedColor: kBrandDark,
                   labelStyle: TextStyle(
-                      color: active ? Colors.white : kBrandDark,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 11),
+                    color: active ? Colors.white : kBrandDark,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                  ),
                   backgroundColor: kBrandMuted,
                 );
-              }).toList()),
-        ],
-        const SizedBox(height: 24),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(
+              }).toList(),
+            ),
+          ],
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(
               context,
-              _PaymentChoice(_method,
-                  channel: _method == 'virtual_account' ? _channel : null)),
-          style: ElevatedButton.styleFrom(
+              _PaymentChoice(
+                _method,
+                channel: _method == 'virtual_account' ? _channel : null,
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
               backgroundColor: kBrandDark,
               foregroundColor: Colors.white,
               minimumSize: const Size(double.infinity, 56),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-          child: const Text('PESAN SEKARANG',
-              style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
-        ),
-        const SizedBox(height: 8),
-      ]),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: const Text(
+              'PESAN SEKARANG',
+              style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
     );
   }
 
@@ -1672,20 +2559,29 @@ class _PaymentMethodSheetState extends State<PaymentMethodSheet> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-            color: active ? kBrandDark : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-                color: active ? kBrandDark : const Color(0xFFF1F1F1))),
-        child: Row(children: [
-          Icon(icon, color: active ? kBrandAccent : kBrandDark, size: 20),
-          const SizedBox(width: 16),
-          Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      color: active ? Colors.white : kBrandDark,
-                      fontWeight: FontWeight.bold))),
-          if (active) const Icon(LucideIcons.check, color: kBrandAccent, size: 18),
-        ]),
+          color: active ? kBrandDark : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: active ? kBrandDark : const Color(0xFFF1F1F1),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: active ? kBrandAccent : kBrandDark, size: 20),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: active ? Colors.white : kBrandDark,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            if (active)
+              const Icon(LucideIcons.check, color: kBrandAccent, size: 18),
+          ],
+        ),
       ),
     );
   }
@@ -1724,10 +2620,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _checking = true;
     try {
       final fresh = await OrderService.fetchOrder(widget.order.id);
-      if (!mounted) return;
+      if (!mounted || fresh == null) return;
       setState(() => _paymentStatus = fresh.paymentStatus);
-      AppState.currentOrder =
-          AppState.currentOrder?.copyWith(paymentStatus: fresh.paymentStatus, status: fresh.status);
+
+      // Sync status ke activeOrders
+      final idx = AppState.activeOrders.indexWhere(
+        (o) => o.id == widget.order.id,
+      );
+      if (idx != -1) {
+        AppState.activeOrders[idx] = AppState.activeOrders[idx].copyWith(
+          paymentStatus: fresh.paymentStatus,
+          status: fresh.status,
+        );
+      }
+
       if (fresh.paymentStatus == 'paid') {
         _timer?.cancel();
         _onPaid();
@@ -1765,207 +2671,443 @@ class _PaymentScreenState extends State<PaymentScreen> {
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFFF1F1F1))),
-            child: Column(children: [
-              Text('Antrean #${order.queueNumber}',
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold, color: kBrandDark)),
-              const SizedBox(height: 4),
-              Text('Total: Rp${order.total ~/ 1000}K',
-                  style: const TextStyle(color: Colors.grey)),
-            ]),
-          ),
-          const SizedBox(height: 24),
-          if (isQris)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFFF1F1F1))),
-              child: Column(children: [
-                const Text('Pindai kode QRIS',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                if (order.qrCodeUrl != null && order.qrCodeUrl!.isNotEmpty)
-                  Image.network(order.qrCodeUrl!,
-                      width: 220,
-                      height: 220,
-                      errorBuilder: (_, _, _) => const Icon(LucideIcons.qrCode,
-                          size: 180, color: kBrandDark))
-                else
-                  const Icon(LucideIcons.qrCode, size: 180, color: kBrandDark),
-              ]),
-            )
-          else
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFFF1F1F1))),
-              child: Column(children: [
-                Text('${(order.paymentChannel ?? '').toUpperCase()} Virtual Account',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                SelectableText(order.vaNumber ?? '-',
+                border: Border.all(color: const Color(0xFFF1F1F1)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'Antrean #${order.queueNumber}',
                     style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: kBrandDark,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Total: Rp${order.total ~/ 1000}K',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (isQris)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFFF1F1F1)),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Pindai kode QRIS',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+                    if (order.qrCodeUrl != null && order.qrCodeUrl!.isNotEmpty)
+                      Image.network(
+                        order.qrCodeUrl!,
+                        width: 220,
+                        height: 220,
+                        errorBuilder: (_, _, _) => const Icon(
+                          LucideIcons.qrCode,
+                          size: 180,
+                          color: kBrandDark,
+                        ),
+                      )
+                    else
+                      const Icon(
+                        LucideIcons.qrCode,
+                        size: 180,
+                        color: kBrandDark,
+                      ),
+                  ],
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFFF1F1F1)),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      '${(order.paymentChannel ?? '').toUpperCase()} Virtual Account',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      order.vaNumber ?? '-',
+                      style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 2,
-                        color: kBrandDark)),
-                const SizedBox(height: 8),
-                const Text('Transfer ke nomor VA di atas',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
-              ]),
-            ),
-          const SizedBox(height: 24),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(paid ? LucideIcons.checkCircle2 : LucideIcons.clock,
-                color: paid ? Colors.green : kBrandAccent, size: 18),
-            const SizedBox(width: 8),
-            Text(paid ? 'Pembayaran diterima' : 'Menunggu pembayaran...',
-                style: TextStyle(
+                        color: kBrandDark,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Transfer ke nomor VA di atas',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  paid ? LucideIcons.checkCircle2 : LucideIcons.clock,
+                  color: paid ? Colors.green : kBrandAccent,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  paid ? 'Pembayaran diterima' : 'Menunggu pembayaran...',
+                  style: TextStyle(
                     color: paid ? Colors.green : Colors.grey,
-                    fontWeight: FontWeight.bold)),
-          ]),
-          const SizedBox(height: 16),
-          OutlinedButton(
-            onPressed: _checking ? null : _poll,
-            style: OutlinedButton.styleFrom(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: _checking ? null : _poll,
+              style: OutlinedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 52),
                 side: const BorderSide(color: kBrandDark),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-            child: const Text('CEK STATUS PEMBAYARAN',
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: const Text(
+                'CEK STATUS PEMBAYARAN',
                 style: TextStyle(
-                    color: kBrandDark, fontWeight: FontWeight.bold, letterSpacing: 1)),
-          ),
-        ]),
+                  color: kBrandDark,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────
-// ORDERS SCREEN — status from polling
+// ORDERS SCREEN — list semua active orders + polling
 // ─────────────────────────────────────────────────────────
 class OrdersScreen extends StatelessWidget {
   const OrdersScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    if (AppState.currentOrder == null) {
-      return Column(children: [
-        const StickyHeader(
-            title: 'status.', subtitle: 'Lacak Pesananmu', icon: LucideIcons.timer),
-        Expanded(
-            child: Center(
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(LucideIcons.coffee, size: 64, color: Colors.grey.shade200),
-          const SizedBox(height: 16),
-          const Text('Belum ada pesanan aktif',
-              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-        ]))),
-      ]);
-    }
+    final orders = AppState.activeOrders;
 
-    final order = AppState.currentOrder!;
+    return Column(
+      children: [
+        StickyHeader(
+          title: 'status.',
+          subtitle: orders.isEmpty
+              ? 'Lacak Pesananmu'
+              : '${orders.length} pesanan aktif',
+          icon: LucideIcons.timer,
+        ),
+        Expanded(
+          child: orders.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        LucideIcons.coffee,
+                        size: 64,
+                        color: Colors.grey.shade200,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Belum ada pesanan aktif',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
+                  itemCount: orders.length,
+                  itemBuilder: (ctx, i) => _OrderCard(order: orders[i]),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _OrderCard extends StatelessWidget {
+  final Order order;
+  const _OrderCard({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final cancelled = order.status == 'cancelled';
+    final currentIdx = cancelled ? -1 : kStatusFlow.indexOf(order.status);
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => _OrderDetailScreen(order: order)),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: const Color(0xFFF1F1F1)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Antrean #${order.queueNumber}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: cancelled ? Colors.red.shade50 : kBrandDark,
+                    borderRadius: BorderRadius.circular(100),
+                  ),
+                  child: Text(
+                    kStatusLabels[order.status] ?? order.status,
+                    style: TextStyle(
+                      color: cancelled ? Colors.red : Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Total: Rp${order.total ~/ 1000}K',
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            // Mini progress bar
+            if (!cancelled)
+              Row(
+                children: List.generate(kStatusFlow.length, (i) {
+                  final done = currentIdx >= i;
+                  return Expanded(
+                    child: Container(
+                      height: 4,
+                      margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(
+                        color: done ? kBrandAccent : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            if (cancelled)
+              const Text(
+                'Pesanan dibatalkan',
+                style: TextStyle(color: Colors.red, fontSize: 11),
+              ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Ketuk untuk detail →',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OrderDetailScreen extends StatelessWidget {
+  final Order order;
+  const _OrderDetailScreen({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
     final currentIdx = kStatusFlow.indexOf(order.status);
     final cancelled = order.status == 'cancelled';
 
-    return Column(children: [
-      StickyHeader(
-          title: 'status pesanan.',
-          subtitle: 'Antrean #${order.queueNumber}',
-          icon: LucideIcons.coffee),
-      Expanded(
-          child: SingleChildScrollView(
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: kBrandLight,
+        elevation: 0,
+        foregroundColor: kBrandDark,
+        title: Text('Antrean #${order.queueNumber}'),
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(children: [
-          Row(children: [
-            Expanded(child: _infoCard('ESTIMASI', order.estimatedTime, dark: false)),
-            const SizedBox(width: 16),
-            Expanded(child: _infoCard('ANTREAN', '${order.queueNumber}', dark: true)),
-          ]),
-          const SizedBox(height: 40),
-          if (cancelled)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _infoCard(
+                    'ESTIMASI',
+                    order.estimatedTime,
+                    dark: false,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _infoCard(
+                    'ANTREAN',
+                    '${order.queueNumber}',
+                    dark: true,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
+            if (cancelled)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
                   color: Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(20)),
-              child: const Row(children: [
-                Icon(LucideIcons.xCircle, color: Colors.red),
-                SizedBox(width: 12),
-                Text('Pesanan dibatalkan',
-                    style: TextStyle(
-                        color: Colors.red, fontWeight: FontWeight.bold)),
-              ]),
-            )
-          else
-            ...List.generate(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(LucideIcons.xCircle, color: Colors.red),
+                    SizedBox(width: 12),
+                    Text(
+                      'Pesanan dibatalkan',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...List.generate(
                 kStatusFlow.length,
                 (i) => Padding(
-                      padding: const EdgeInsets.only(bottom: 24),
-                      child: Row(children: [
-                        Icon(
-                            currentIdx >= i
-                                ? LucideIcons.checkCircle2
-                                : LucideIcons.circle,
-                            color: currentIdx >= i
-                                ? kBrandAccent
-                                : Colors.grey.shade300,
-                            size: 24),
-                        const SizedBox(width: 24),
-                        Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(kStatusLabels[kStatusFlow[i]] ?? kStatusFlow[i],
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: currentIdx >= i
-                                          ? kBrandDark
-                                          : Colors.grey)),
-                              Text(
-                                  currentIdx == i
-                                      ? 'Sedang diproses...'
-                                      : i < currentIdx
-                                          ? 'Selesai'
-                                          : 'Belum diproses',
-                                  style: const TextStyle(
-                                      fontSize: 10, color: Colors.grey)),
-                            ]),
-                      ]),
-                    )),
-        ]),
-      )),
-    ]);
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: Row(
+                    children: [
+                      Icon(
+                        currentIdx >= i
+                            ? LucideIcons.checkCircle2
+                            : LucideIcons.circle,
+                        color: currentIdx >= i
+                            ? kBrandAccent
+                            : Colors.grey.shade300,
+                        size: 24,
+                      ),
+                      const SizedBox(width: 24),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            kStatusLabels[kStatusFlow[i]] ?? kStatusFlow[i],
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: currentIdx >= i ? kBrandDark : Colors.grey,
+                            ),
+                          ),
+                          Text(
+                            currentIdx == i
+                                ? 'Sedang diproses...'
+                                : i < currentIdx
+                                ? 'Selesai'
+                                : 'Belum diproses',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _infoCard(String label, String value, {required bool dark}) => Container(
+  Widget _infoCard(String label, String value, {required bool dark}) =>
+      Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-            color: dark ? kBrandDark : Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: dark ? null : Border.all(color: const Color(0xFFF1F1F1))),
-        child: Column(children: [
-          Text(label,
+          color: dark ? kBrandDark : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: dark ? null : Border.all(color: const Color(0xFFF1F1F1)),
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
               style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color: dark ? Colors.white54 : Colors.grey)),
-          Text(value,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                color: dark ? Colors.white54 : Colors.grey,
+              ),
+            ),
+            Text(
+              value,
               style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: dark ? Colors.white : kBrandDark)),
-        ]),
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: dark ? Colors.white : kBrandDark,
+              ),
+            ),
+          ],
+        ),
       );
 }
 
@@ -2007,690 +3149,289 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     if (_showHistory) return _historyView();
 
-    return Column(children: [
-      const StickyHeader(
-          title: 'profilku.', subtitle: 'Informasi Akun', icon: LucideIcons.user),
-      Expanded(
+    return Column(
+      children: [
+        const StickyHeader(
+          title: 'profilku.',
+          subtitle: 'Informasi Akun',
+          icon: LucideIcons.user,
+        ),
+        Expanded(
           child: _loading
-              ? const Center(child: CircularProgressIndicator(color: kBrandDark))
+              ? const Center(
+                  child: CircularProgressIndicator(color: kBrandDark),
+                )
               : SingleChildScrollView(
                   padding: const EdgeInsets.all(24),
-                  child: Column(children: [
-                    const CircleAvatar(
+                  child: Column(
+                    children: [
+                      const CircleAvatar(
                         radius: 50,
                         backgroundColor: kBrandMuted,
-                        child: Icon(LucideIcons.user, size: 44, color: kBrandDark)),
-                    const SizedBox(height: 16),
-                    Text(_profile?.fullName ?? '—',
+                        child: Icon(
+                          LucideIcons.user,
+                          size: 44,
+                          color: kBrandDark,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _profile?.fullName ?? '—',
                         style: const TextStyle(
-                            fontSize: 22, fontWeight: FontWeight.bold)),
-                    Text(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
                         'MEMBER ${(_profile?.role ?? '').toUpperCase()} '
                         'SEJAK ${_profile?.memberSince?.year ?? ''}',
                         style: const TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey,
-                            letterSpacing: 1)),
-                    const SizedBox(height: 32),
-                    Container(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      Container(
                         padding: const EdgeInsets.all(28),
                         decoration: BoxDecoration(
-                            color: kBrandDark,
-                            borderRadius: BorderRadius.circular(32)),
+                          color: kBrandDark,
+                          borderRadius: BorderRadius.circular(32),
+                        ),
                         child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('KONTAK',
-                                  style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1)),
-                              const SizedBox(height: 12),
-                              _contactRow(LucideIcons.mail, _profile?.email ?? '—'),
-                              const SizedBox(height: 8),
-                              _contactRow(LucideIcons.phone,
-                                  (_profile?.phone?.isNotEmpty ?? false)
-                                      ? _profile!.phone!
-                                      : 'Belum diisi'),
-                            ])),
-                    const SizedBox(height: 32),
-                    _menuItem('Poin & Membership', LucideIcons.award, () {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const LoyaltyScreen()));
-                    }),
-                    _menuItem('Riwayat Pesanan', LucideIcons.history,
-                        () => setState(() => _showHistory = true)),
-                    _menuItem('Pengaturan', LucideIcons.settings, () {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const SettingsScreen()));
-                    }),
-                    _menuItem('Bantuan', LucideIcons.helpCircle, () {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const HelpScreen()));
-                    }),
-                    _menuItem('Keluar', LucideIcons.logOut, () async {
-                      AppState.stopPolling();
-                      await AuthService.signOut();
-                      if (mounted) {
-                        Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (_) => const LoginScreen()),
-                            (r) => false);
-                      }
-                    }, color: Colors.red),
-                  ]),
-                )),
-    ]);
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'KONTAK',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _contactRow(
+                              LucideIcons.mail,
+                              _profile?.email ?? '—',
+                            ),
+                            const SizedBox(height: 8),
+                            _contactRow(
+                              LucideIcons.phone,
+                              (_profile?.phone?.isNotEmpty ?? false)
+                                  ? _profile!.phone!
+                                  : 'Belum diisi',
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      _menuItem(
+                        'Riwayat Pesanan',
+                        LucideIcons.history,
+                        () => setState(() => _showHistory = true),
+                      ),
+                      _menuItem('Pengaturan', LucideIcons.settings, () async {
+                        final changed = await Navigator.push<bool>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SettingsScreen(profile: _profile),
+                          ),
+                        );
+                        if (changed == true) _loadProfile();
+                      }),
+                      _menuItem('Bantuan', LucideIcons.helpCircle, () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const HelpScreen()),
+                        );
+                      }),
+                      _menuItem('Keluar', LucideIcons.logOut, () async {
+                        final nav = Navigator.of(context);
+                        CartNotificationToast.dismiss();
+                        AppState.stopPolling();
+                        AppState.activeOrders.clear();
+                        AppState.cart.clear();
+                        await AuthService.signOut();
+                        if (!mounted) return;
+                        nav.pushAndRemoveUntil(
+                          MaterialPageRoute(
+                            builder: (_) => const LoginScreen(),
+                          ),
+                          (r) => false,
+                        );
+                      }, color: Colors.red),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
   }
 
-  Widget _contactRow(IconData icon, String text) => Row(children: [
-        Icon(icon, color: kBrandAccent, size: 16),
-        const SizedBox(width: 12),
-        Expanded(
-            child: Text(text,
-                style: const TextStyle(color: Colors.white, fontSize: 13))),
-      ]);
+  Widget _contactRow(IconData icon, String text) => Row(
+    children: [
+      Icon(icon, color: kBrandAccent, size: 16),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+        ),
+      ),
+    ],
+  );
 
   Widget _historyView() {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: OrderService.fetchHistory(),
       builder: (ctx, snap) {
-        return Column(children: [
-          Container(
+        return Column(
+          children: [
+            Container(
               padding: EdgeInsets.only(
-                  top: MediaQuery.of(context).padding.top + 10,
-                  bottom: 20,
-                  left: 20,
-                  right: 24),
+                top: MediaQuery.of(context).padding.top + 10,
+                bottom: 20,
+                left: 20,
+                right: 24,
+              ),
               decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border(
-                      bottom:
-                          BorderSide(color: Colors.black.withValues(alpha: 0.05)))),
-              child: Row(children: [
-                IconButton(
+                color: Colors.white,
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.black.withValues(alpha: 0.05),
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
                     icon: const Icon(LucideIcons.chevronLeft),
-                    onPressed: () => setState(() => _showHistory = false)),
-                const SizedBox(width: 8),
-                const Text('riwayat.',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              ])),
-          Expanded(
+                    onPressed: () => setState(() => _showHistory = false),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'riwayat.',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
               child: snap.connectionState == ConnectionState.waiting
-                  ? const Center(child: CircularProgressIndicator(color: kBrandDark))
+                  ? const Center(
+                      child: CircularProgressIndicator(color: kBrandDark),
+                    )
                   : (snap.data?.isEmpty ?? true)
-                      ? const Center(child: Text('Belum ada riwayat'))
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(24),
-                          itemCount: snap.data!.length,
-                          itemBuilder: (ctx, i) {
-                            final order = snap.data![i];
-                            final status = order['status']?.toString() ?? '';
-                            final created =
-                                order['created_at']?.toString() ?? '';
-                            final total =
-                                (double.tryParse(order['total']?.toString() ?? '0') ??
-                                        0)
-                                    .round();
-                            return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                    color: kBrandMuted,
-                                    borderRadius: BorderRadius.circular(24)),
-                                child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text('Antrean #${order['queue_number'] ?? '-'}',
-                                                style: const TextStyle(
-                                                    fontWeight: FontWeight.bold)),
-                                            Text(
-                                                created.isNotEmpty
-                                                    ? created.split('T')[0]
-                                                    : '',
-                                                style: const TextStyle(
-                                                    fontSize: 10,
-                                                    color: Colors.grey)),
-                                          ]),
-                                      Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            Text('Rp${total ~/ 1000}K',
-                                                style: const TextStyle(
-                                                    fontWeight: FontWeight.bold)),
-                                            Text(kStatusLabels[status] ?? status,
-                                                style: const TextStyle(
-                                                    color: kBrandAccent,
-                                                    fontSize: 9,
-                                                    fontWeight: FontWeight.bold)),
-                                          ]),
-                                    ]));
-                          })),
-        ]);
+                  ? const Center(child: Text('Belum ada riwayat'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(24),
+                      itemCount: snap.data!.length,
+                      itemBuilder: (ctx, i) {
+                        final order = snap.data![i];
+                        final status = order['status']?.toString() ?? '';
+                        final created = order['created_at']?.toString() ?? '';
+                        final total =
+                            (double.tryParse(
+                                      order['total']?.toString() ?? '0',
+                                    ) ??
+                                    0)
+                                .round();
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: kBrandMuted,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Antrean #${order['queue_number'] ?? '-'}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Text(
+                                    created.isNotEmpty
+                                        ? created.split('T')[0]
+                                        : '',
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    'Rp${total ~/ 1000}K',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Text(
+                                    kStatusLabels[status] ?? status,
+                                    style: const TextStyle(
+                                      color: kBrandAccent,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
       },
     );
   }
 
-  Widget _menuItem(String title, IconData icon, VoidCallback onTap, {Color? color}) =>
-      GestureDetector(
-          onTap: onTap,
-          child: Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFF8F8F8))),
-              child: Row(children: [
-                Icon(icon, size: 20, color: color ?? kBrandDark),
-                const SizedBox(width: 16),
-                Expanded(
-                    child: Text(title,
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, color: color ?? kBrandDark))),
-                const Icon(LucideIcons.chevronRight, color: Colors.grey, size: 18),
-              ])));
-}
-
-// ─────────────────────────────────────────────────────────
-// SETTINGS SCREEN — change password via /auth/change-password
-// ─────────────────────────────────────────────────────────
-class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
-  @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends State<SettingsScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _oldCtrl = TextEditingController();
-  final _newCtrl = TextEditingController();
-  final _confirmCtrl = TextEditingController();
-  bool _saving = false;
-  bool _obscure = true;
-
-  @override
-  void dispose() {
-    _oldCtrl.dispose();
-    _newCtrl.dispose();
-    _confirmCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    try {
-      await AuthService.changePassword(
-          oldPassword: _oldCtrl.text, newPassword: _newCtrl.text);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Password berhasil diubah')));
-      Navigator.pop(context);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  InputDecoration _decoration(String label) => InputDecoration(
-        labelText: label,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFF1F1F1))),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFF1F1F1))),
-        suffixIcon: IconButton(
-            icon: Icon(_obscure ? LucideIcons.eyeOff : LucideIcons.eye,
-                size: 18, color: Colors.grey),
-            onPressed: () => setState(() => _obscure = !_obscure)),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(children: [
-        const _SubPageHeader(title: 'pengaturan.'),
-        Expanded(
-            child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('UBAH PASSWORD',
-                  style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey,
-                      letterSpacing: 1)),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _oldCtrl,
-                obscureText: _obscure,
-                decoration: _decoration('Password lama'),
-                validator: (v) =>
-                    (v == null || v.isEmpty) ? 'Wajib diisi' : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _newCtrl,
-                obscureText: _obscure,
-                decoration: _decoration('Password baru'),
-                validator: (v) => (v == null || v.length < 8)
-                    ? 'Minimal 8 karakter'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _confirmCtrl,
-                obscureText: _obscure,
-                decoration: _decoration('Konfirmasi password baru'),
-                validator: (v) =>
-                    v != _newCtrl.text ? 'Password tidak sama' : null,
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _saving ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: kBrandDark,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20))),
-                  child: _saving
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Text('SIMPAN',
-                          style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ]),
-          ),
-        )),
-      ]),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────
-// HELP SCREEN — static FAQ
-// ─────────────────────────────────────────────────────────
-class HelpScreen extends StatelessWidget {
-  const HelpScreen({super.key});
-
-  static const _faqs = [
-    (
-      'Bagaimana cara memesan?',
-      'Pilih menu di beranda, atur jumlah dan catatan, lalu tambahkan ke '
-          'keranjang. Buka keranjang dan tekan tombol pesan untuk checkout.'
-    ),
-    (
-      'Metode pembayaran apa saja yang tersedia?',
-      'Kamu bisa membayar tunai di kasir, QRIS, atau Virtual Account '
-          '(BCA, BNI, BRI, Mandiri).'
-    ),
-    (
-      'Bagaimana melihat status pesanan?',
-      'Setelah memesan, buka tab pesanan untuk melihat nomor antrean dan '
-          'status pesanan yang diperbarui otomatis.'
-    ),
-    (
-      'Di mana riwayat pesanan saya?',
-      'Buka Profil lalu pilih Riwayat Pesanan.'
-    ),
-    (
-      'Lupa password?',
-      'Hubungi kasir, admin di outlet, atau Chat CS untuk bantuan reset password. '
-          'Jika masih ingat password lama, ubah lewat menu Pengaturan.'
-    ),
-  ];
-
-  Widget _chatCard(BuildContext context) => GestureDetector(
-        onTap: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const SupportChatScreen())),
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 24),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-              color: kBrandDark, borderRadius: BorderRadius.circular(24)),
-          child: Row(children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                  color: kBrandAccent.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(16)),
-              child: const Icon(LucideIcons.messageCircle,
-                  color: kBrandAccent, size: 22),
-            ),
-            const SizedBox(width: 16),
-            const Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Chat Customer Service',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15)),
-                    SizedBox(height: 2),
-                    Text('Tanya langsung ke tim kami',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                  ]),
-            ),
-            const Icon(LucideIcons.chevronRight, color: Colors.white54, size: 18),
-          ]),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(children: [
-        const _SubPageHeader(title: 'bantuan.'),
-        Expanded(
-            child: ListView.builder(
-          padding: const EdgeInsets.all(24),
-          itemCount: _faqs.length + 1,
-          itemBuilder: (ctx, index) {
-            if (index == 0) return _chatCard(ctx);
-            final (q, a) = _faqs[index - 1];
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Material(
-                color: Colors.white,
-                clipBehavior: Clip.antiAlias,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    side: const BorderSide(color: Color(0xFFF1F1F1))),
-                child: Theme(
-                  data: Theme.of(ctx).copyWith(dividerColor: Colors.transparent),
-                  child: ExpansionTile(
-                    tilePadding: const EdgeInsets.symmetric(horizontal: 20),
-                    childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                    iconColor: kBrandDark,
-                    collapsedIconColor: Colors.grey,
-                    title: Text(q,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            color: kBrandDark)),
-                    children: [
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(a,
-                            style: const TextStyle(
-                                fontSize: 13, color: Colors.black54, height: 1.5)),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        )),
-      ]),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────
-// CS CHAT — /support/messages, polled every 5s
-// ─────────────────────────────────────────────────────────
-class SupportChatScreen extends StatefulWidget {
-  const SupportChatScreen({super.key});
-  @override
-  State<SupportChatScreen> createState() => _SupportChatScreenState();
-}
-
-class _SupportChatScreenState extends State<SupportChatScreen> {
-  final _ctrl = TextEditingController();
-  final _scroll = ScrollController();
-  final List<SupportMessage> _messages = [];
-  Timer? _timer;
-  bool _loading = true;
-  bool _sending = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _poll());
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _ctrl.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    try {
-      final list = await SupportService.fetchMessages();
-      if (!mounted) return;
-      setState(() {
-        _messages
-          ..clear()
-          ..addAll(list);
-        _loading = false;
-        _error = null;
-      });
-      _scrollToEnd();
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = e.toString();
-        });
-      }
-    }
-  }
-
-  Future<void> _poll() async {
-    if (_loading) return;
-    final lastId = _messages.isEmpty ? null : _messages.last.id;
-    try {
-      final fresh = await SupportService.fetchMessages(afterId: lastId);
-      final known = _messages.map((m) => m.id).toSet();
-      final added = fresh.where((m) => !known.contains(m.id)).toList();
-      if (added.isEmpty || !mounted) return;
-      setState(() => _messages.addAll(added));
-      _scrollToEnd();
-    } catch (_) {
-      // Polling errors are silent; next tick retries.
-    }
-  }
-
-  Future<void> _send() async {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    try {
-      final msg = await SupportService.send(text);
-      if (!mounted) return;
-      _ctrl.clear();
-      setState(() {
-        if (!_messages.any((m) => m.id == msg.id)) _messages.add(msg);
-      });
-      _scrollToEnd();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  void _scrollToEnd() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(_scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-      }
-    });
-  }
-
-  String _time(DateTime? d) {
-    if (d == null) return '';
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${two(d.day)}/${two(d.month)} ${two(d.hour)}:${two(d.minute)}';
-  }
-
-  Widget _bubble(SupportMessage m) {
-    final mine = m.fromCustomer;
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        decoration: BoxDecoration(
-          color: mine ? kBrandDark : Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(mine ? 18 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 18),
-          ),
-          border: mine ? null : Border.all(color: const Color(0xFFF1F1F1)),
-        ),
-        child: Column(
-            crossAxisAlignment:
-                mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              if (!mine)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 2),
-                  child: Text('CS Konco Space',
-                      style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: kBrandAccent)),
-                ),
-              Text(m.body,
-                  style: TextStyle(
-                      fontSize: 14,
-                      height: 1.4,
-                      color: mine ? Colors.white : kBrandDark)),
-              const SizedBox(height: 4),
-              Text(_time(m.createdAt),
-                  style: TextStyle(
-                      fontSize: 9,
-                      color: mine ? Colors.white54 : Colors.grey)),
-            ]),
+  Widget _menuItem(
+    String title,
+    IconData icon,
+    VoidCallback onTap, {
+    Color? color,
+  }) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFF8F8F8)),
       ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kBrandLight,
-      body: Column(children: [
-        const _SubPageHeader(title: 'chat cs.'),
-        Expanded(
-          child: _loading
-              ? const Center(
-                  child: CircularProgressIndicator(color: kBrandDark))
-              : _error != null
-                  ? Center(
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text(_error!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.grey)),
-                      TextButton(
-                          onPressed: () {
-                            setState(() => _loading = true);
-                            _load();
-                          },
-                          child: const Text('Coba lagi')),
-                    ]))
-                  : _messages.isEmpty
-                      ? const Center(
-                          child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Text(
-                              'Halo! Ada yang bisa kami bantu?\n'
-                              'Tulis pertanyaanmu, tim CS akan membalas secepatnya.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.grey, height: 1.5)),
-                        ))
-                      : ListView.builder(
-                          controller: _scroll,
-                          padding: const EdgeInsets.all(20),
-                          itemCount: _messages.length,
-                          itemBuilder: (_, i) => _bubble(_messages[i]),
-                        ),
-        ),
-        Container(
-          padding: EdgeInsets.fromLTRB(
-              16, 10, 10, MediaQuery.of(context).padding.bottom + 10),
-          decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(
-                  top: BorderSide(
-                      color: Colors.black.withValues(alpha: 0.05)))),
-          child: Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _ctrl,
-                minLines: 1,
-                maxLines: 4,
-                maxLength: 2000,
-                textInputAction: TextInputAction.newline,
-                decoration: InputDecoration(
-                  hintText: 'Tulis pesan...',
-                  counterText: '',
-                  filled: true,
-                  fillColor: kBrandMuted,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide.none),
-                ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: color ?? kBrandDark),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: color ?? kBrandDark,
               ),
             ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: _sending ? null : _send,
-              style: IconButton.styleFrom(backgroundColor: kBrandDark),
-              icon: _sending
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Icon(LucideIcons.send, color: Colors.white, size: 18),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
+          ),
+          const Icon(LucideIcons.chevronRight, color: Colors.grey, size: 18),
+        ],
+      ),
+    ),
+  );
 }
 
 class _SubPageHeader extends StatelessWidget {
@@ -2716,4 +3457,94 @@ class _SubPageHeader extends StatelessWidget {
         Text(title,
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
       ]));
+}
+
+// ─────────────────────────────────────────────────────────
+// ALL PRODUCTS SCREEN — dibuka dari tombol "Lihat Semua"
+// ─────────────────────────────────────────────────────────
+class AllProductsScreen extends StatefulWidget {
+  const AllProductsScreen({super.key});
+  @override
+  State<AllProductsScreen> createState() => _AllProductsScreenState();
+}
+
+class _AllProductsScreenState extends State<AllProductsScreen> {
+  List<Product> _products = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final products = await ProductService.fetchByCategory('Semua');
+      if (mounted) {
+        setState(() {
+          _products = products;
+          _loading = false;
+        });
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: kBrandLight,
+        elevation: 0,
+        foregroundColor: kBrandDark,
+        title: const Text('Semua Menu',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: kBrandDark))
+          : _error != null
+              ? Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.grey)),
+                    const SizedBox(height: 12),
+                    TextButton(
+                        onPressed: _load,
+                        child: const Text('Coba lagi',
+                            style: TextStyle(
+                                color: kBrandDark,
+                                fontWeight: FontWeight.bold))),
+                  ]),
+                )
+              : _products.isEmpty
+                  ? const Center(
+                      child: Text('Belum ada menu',
+                          style: TextStyle(color: Colors.grey)))
+                  : GridView.builder(
+                      padding: const EdgeInsets.all(24),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              mainAxisSpacing: 20,
+                              crossAxisSpacing: 20,
+                              childAspectRatio: 0.8),
+                      itemCount: _products.length,
+                      itemBuilder: (ctx, i) =>
+                          ProductCard(product: _products[i]),
+                    ),
+    );
+  }
 }

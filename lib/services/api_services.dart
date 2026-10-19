@@ -97,6 +97,25 @@ class AuthService {
     }
   }
 
+  static Future<Map<String, dynamic>> updateProfile({
+    required String name,
+    String? phone,
+  }) async {
+    try {
+      final res = await ApiClient.instance.put(
+        ApiEndpoints.updateProfile,
+        data: {'name': name, 'phone': (phone == null || phone.isEmpty) ? null : phone},
+      );
+      final data = _unwrap(res);
+      if (data is! Map) throw ApiException('Respons tidak valid');
+      final user = Map<String, dynamic>.from(data);
+      await TokenStorage.saveUser(user);
+      return user;
+    } on DioException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
   static Future<bool> isLoggedIn() async {
     final token = await TokenStorage.getToken();
     return token != null && token.isNotEmpty;
@@ -170,7 +189,9 @@ class OrderService {
       .map((i) => {
             'menu_id': i.product.id,
             'quantity': i.quantity,
-            'notes': i.note,
+            if (i.condimentOptionIds.isNotEmpty)
+              'condiment_option_ids': i.condimentOptionIds,
+            if (i.note.isNotEmpty) 'notes': i.note,
           })
       .toList();
 
@@ -219,13 +240,18 @@ class OrderService {
   }
 
   /// Polls a single order to refresh its status/payment fields.
-  static Future<Order> fetchOrder(int id) async {
+  /// Returns null on transient errors (network, timeout) so polling can retry.
+  static Future<Order?> fetchOrder(int id) async {
     try {
       final res = await ApiClient.instance.get(ApiEndpoints.orderDetail(id));
       final data = _unwrap(res) as Map;
       return Order.fromJson(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
-      throw ApiException(extractApiError(e));
+      // Bubble up auth errors; swallow transient errors for polling resilience
+      if (e.response?.statusCode == 401) rethrow;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -386,6 +412,79 @@ class SupportService {
       );
       final data = _unwrap(res) as Map;
       return SupportMessage.fromJson(Map<String, dynamic>.from(data));
+    } on DioException catch (e) {
+      throw ApiException(extractApiError(e));
+    }
+  }
+}
+
+class StoreInfo {
+  StoreInfo({
+    required this.storeName,
+    this.address,
+    this.phone,
+    this.whatsapp,
+    this.email,
+    this.instagram,
+    this.openingHours,
+  });
+
+  final String storeName;
+  final String? address;
+  final String? phone;
+  final String? whatsapp;
+  final String? email;
+  final String? instagram;
+  final String? openingHours;
+
+  static String? _s(Object? v) {
+    final s = v?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  factory StoreInfo.fromJson(Map<String, dynamic> j) => StoreInfo(
+        storeName: _s(j['store_name']) ?? 'Konco Space',
+        address: _s(j['address']),
+        phone: _s(j['phone']),
+        whatsapp: _s(j['whatsapp']),
+        email: _s(j['email']),
+        instagram: _s(j['instagram']),
+        openingHours: _s(j['opening_hours']),
+      );
+}
+
+class FaqItem {
+  FaqItem({required this.question, required this.answer});
+  final String question;
+  final String answer;
+
+  factory FaqItem.fromJson(Map<String, dynamic> j) => FaqItem(
+        question: j['question']?.toString() ?? '',
+        answer: j['answer']?.toString() ?? '',
+      );
+}
+
+class AppInfo {
+  AppInfo({required this.store, required this.faqs});
+  final StoreInfo store;
+  final List<FaqItem> faqs;
+}
+
+class AppInfoService {
+  static Future<AppInfo> fetch() async {
+    try {
+      final res = await ApiClient.instance.get(
+        ApiEndpoints.appInfo,
+        queryParameters: {'audience': 'customer'},
+      );
+      final data = Map<String, dynamic>.from(_unwrap(res) as Map);
+      return AppInfo(
+        store: StoreInfo.fromJson(Map<String, dynamic>.from(data['store'] as Map? ?? const {})),
+        faqs: ((data['faqs'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => FaqItem.fromJson(Map<String, dynamic>.from(m)))
+            .toList(),
+      );
     } on DioException catch (e) {
       throw ApiException(extractApiError(e));
     }

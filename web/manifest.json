@@ -1,11 +1,11 @@
 {
-    "name": "flutter_customer_cofflow",
-    "short_name": "flutter_customer_cofflow",
+    "name": "Konco Space",
+    "short_name": "Konco Space",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#1C2C22",
+    "theme_color": "#1C2C22",
+    "description": "Konco Space Customer App",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
